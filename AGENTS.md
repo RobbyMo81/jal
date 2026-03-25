@@ -246,3 +246,52 @@ can consume. Do not build the UI.
 ### CONVENTIONS
 - **[JAL-005] Provider name validation: /^[a-z][a-z0-9-]*$/**: All provider names must match /^[a-z][a-z0-9-]*$/. Uppercase, spaces, or special chars fail immediately. CLI tools must lowercase before passing to AuthManager.login().
 
+
+## [JAL-007] — 2026-03-25
+### Pattern Discovered
+- `CheckpointStore` in `src/apex/checkpoint/CheckpointStore.ts` handles all checkpoint persistence.
+  Saves atomically via write-to-temp + rename. Maintains a `latest.json` pointer file so
+  `loadLatest()` finds the most recently saved task without scanning all files.
+- `OutputStore` in `src/apex/checkpoint/OutputStore.ts` manages tool output refs.
+  Outputs ≤ 10 KB are inlined in `ToolOutputRef.inline`; larger outputs are written to
+  `~/.apex/state/outputs/<sha256>`. SHA256 is always verified on `retrieve()`. Retention
+  is controlled by `APEX_OUTPUT_RETENTION_DAYS` (default 7). Call `cleanup()` at startup.
+- `CrashRecovery` in `src/apex/checkpoint/CrashRecovery.ts` orchestrates recovery:
+  (1) load latest checkpoint, (2) mark `in_progress` → `interrupted`, (3) queue
+  `PendingApproval` for every interrupted Tier 2 step, (4) call `resetForRecovery()` on
+  all `INonRecoverableStateReset` implementations, (5) verify all output hashes, (6) persist.
+  Recovery is fully synchronous and should complete in well under 10 s.
+- `INonRecoverableStateReset` is the contract for components that hold OS handles (subprocess
+  PIDs, sockets, timers). ShellEngine and HeartbeatScheduler should implement it when wired
+  into `CrashRecovery`.
+### Gotcha
+- `CrashRecovery.recover()` does NOT call `resetForRecovery()` when no checkpoint exists
+  (early return). Components must not assume reset runs on every startup — only on recovery.
+- `tool_outputs_ref` map keys are arbitrary strings (step IDs, tool call IDs). The map is
+  checked per-entry during `verifyOutputs()`. If an on-disk file is missing (expired),
+  verification fails and `output_verification_errors` will be non-empty. Do not resume
+  the task before investigating these errors.
+- `pending_approvals` deduplication: `CrashRecovery` checks `step_id` before appending.
+  If a crash happened after a Tier 2 approval was already queued (but before approval was
+  granted), the existing entry is kept rather than doubled.
+- `CheckpointStore.list()` filters on `.checkpoint.json` suffix. The `latest.json` file and
+  any `.tmp` files are intentionally excluded — do not add logic to include them.
+### Files Modified
+- `src/apex/types/index.ts` (extended — StepStatus, ToolCursor, ToolOutputRef, PendingApproval, CheckpointStep, Checkpoint)
+- `src/apex/checkpoint/OutputStore.ts` (new)
+- `src/apex/checkpoint/CheckpointStore.ts` (new)
+- `src/apex/checkpoint/CrashRecovery.ts` (new)
+- `tests/checkpoint/OutputStore.test.ts` (new — 22 tests)
+- `tests/checkpoint/CheckpointStore.test.ts` (new — 18 tests)
+- `tests/checkpoint/CrashRecovery.test.ts` (new — 17 tests)
+
+## Auto-compiled from FORGE Discoveries — 2026-03-25
+
+### PATTERNS
+- **[JAL-007] CrashRecovery only resets state when a checkpoint exists**: CrashRecovery.recover() returns early when loadLatest() returns null — stateResets are NOT called. Components must not assume reset runs on every startup, only on recovery.
+- **[JAL-007] CheckpointStore latest.json is a pointer file, not a snapshot**: latest.json stores { task_id, updated_at }. Loading latest always re-reads the full .checkpoint.json. If the pointer points to a deleted task, loadLatest() returns null.
+- **[JAL-007] INonRecoverableStateReset is the wiring point for ShellEngine and HeartbeatScheduler**: JAL-008+ should implement INonRecoverableStateReset on ShellEngine (cancel activeExecutions) and HeartbeatScheduler (stop interval). Pass them to CrashRecovery constructor at startup.
+
+### GOTCHAS
+- **[JAL-007] tool_outputs_ref missing-file errors must block task resume**: CrashRecovery.recover() returns output_verification_errors. If non-empty, at least one on-disk output file is missing (expired/corrupted). Do NOT resume the task — the agent will be missing required tool context.
+

@@ -219,6 +219,106 @@ export interface DockerActiveOperation {
   cancelled: boolean;
 }
 
+// ── Checkpoint & Crash Recovery ───────────────────────────────────────────────
+
+export type StepStatus = 'pending' | 'in_progress' | 'completed' | 'interrupted' | 'failed';
+
+/**
+ * Resumable position marker for a tool that was in-progress when the process crashed.
+ * Stored in CheckpointStep.cursor so the tool can resume from its last known position.
+ */
+export interface ToolCursor {
+  /** For log-stream tools: last successfully read line number (0-based). */
+  line_position?: number;
+  /** For paginated list tools: opaque pagination token from the last page fetched. */
+  pagination_token?: string;
+  /** For byte-range tools: last successfully read byte offset. */
+  byte_offset?: number;
+  /** Extension point for tool-specific cursor fields. */
+  [key: string]: unknown;
+}
+
+/**
+ * Reference to a tool output, either inlined (≤ 10 KB) or stored on disk (> 10 KB).
+ * The hash field is always present and is verified on recovery via SHA256.
+ */
+export interface ToolOutputRef {
+  /** SHA256 hex digest of the raw UTF-8 output content. */
+  hash: string;
+  /** Original byte length of the output. */
+  size_bytes: number;
+  /**
+   * Inline content — present only when size_bytes ≤ 10 240 (10 KB).
+   * When absent, the content lives at ~/.apex/state/outputs/<hash>.
+   */
+  inline?: string;
+}
+
+/**
+ * Approval item re-generated during crash recovery for any Tier 2 step that
+ * was in-flight when the process was interrupted.  Must be resolved before
+ * the task can resume.
+ */
+export interface PendingApproval {
+  /** ID of the step that was interrupted. */
+  step_id: string;
+  /** Dot-namespaced action string (mirrors ApprovalToken.action). */
+  action: string;
+  tier: PolicyTier;
+  requested_at: string;
+  /** Original approval token ID, if one had been issued before the crash. */
+  approval_id?: string;
+}
+
+/** Single step within a task, tracked inside a Checkpoint. */
+export interface CheckpointStep {
+  /** Unique identifier for this step within the task. */
+  id: string;
+  name: string;
+  status: StepStatus;
+  tier: PolicyTier;
+  started_at?: string;
+  completed_at?: string;
+  /**
+   * Last-known tool cursor for this step.  On recovery, the tool reads this
+   * field and resumes from its last position rather than restarting.
+   */
+  cursor?: ToolCursor;
+  /**
+   * Key into Checkpoint.tool_outputs_ref for this step's output, if any.
+   * Resolves to a ToolOutputRef (inline or on-disk hash).
+   */
+  output_ref_key?: string;
+}
+
+/**
+ * Versioned checkpoint persisted to ~/.apex/state/checkpoints/<task_id>.checkpoint.json.
+ * Written atomically after every step transition.
+ * See PRD §7.2–7.3.
+ */
+export interface Checkpoint {
+  /** Increment when the schema changes.  Currently: 1. */
+  schema_version: number;
+  task_id: string;
+  goal: string;
+  /** Zero-based index of the currently active step in `steps`. */
+  current_step: number;
+  /** Status of the step at `current_step` (denormalised for fast reads). */
+  step_status: StepStatus;
+  steps: CheckpointStep[];
+  /** Approvals that must be re-resolved before the task can resume. */
+  pending_approvals: PendingApproval[];
+  /**
+   * Map of ref-key → ToolOutputRef.
+   * Keys are arbitrary strings (typically step IDs or tool call IDs).
+   * Large outputs (> 10 KB) reference files on disk; small ones are inlined.
+   */
+  tool_outputs_ref: Record<string, ToolOutputRef>;
+  /** SHA256 hex digest of the active policy-snapshot file at checkpoint time. */
+  policy_snapshot_hash: string;
+  updated_at: string;
+}
+
 // ── Heartbeat & Playbooks ─────────────────────────────────────────────────────
 
 export type PlaybookTriggerType =
