@@ -39,3 +39,27 @@ can consume. Do not build the UI.
 ### Files Modified
 - `src/apex/shell/ShellEngine.ts` (new)
 - `tests/shell/ShellEngine.test.ts` (new)
+
+## [JAL-002] — 2026-03-25
+### Pattern Discovered
+- `DockerEngine` in `src/apex/docker/DockerEngine.ts` is the single spawn point for all Docker CLI calls.
+  Never call `child_process.spawn('docker', ...)` directly — always use `DockerEngine`.
+- `IPolicyFirewall` in `src/apex/policy/PolicyFirewall.ts` is the contract for the policy layer.
+  `DockerEngine` accepts `IPolicyFirewall` via constructor injection — JAL-003's full firewall drops in
+  without modifying DockerEngine.
+- `DockerStubFirewall` enforces only JAL-002 safety gates (--privileged=Tier 3, prune/rm=Tier 2).
+  It does NOT implement full tier logic — that is JAL-003's job.
+- Streaming contract mirrors JAL-001: `onChunk(chunk, 'stdout'|'stderr')` callback + AbortSignal
+  cancellation with SIGTERM + 2s SIGKILL escalation.
+### Gotcha
+- Container ID validation rejects IDs starting with `-` (e.g. `-v` injection attempts). Pattern:
+  `/^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$/`
+- `jest.useFakeTimers()` in Jest 29 intercepts `setImmediate`, hanging tests that use
+  `setImmediate(() => proc.emit('close', ...))` to resolve mock processes. Use real timers with
+  `timeout_ms: 50` for timeout tests instead.
+- `mockSpawn.mock.calls[0]` reads the first call globally across all tests unless `jest.clearAllMocks()`
+  runs in a top-level `beforeEach`. Always add this guard or all call-index assertions will be wrong.
+### Files Modified
+- `src/apex/docker/DockerEngine.ts` (new)
+- `src/apex/policy/PolicyFirewall.ts` (new)
+- `tests/docker/DockerEngine.test.ts` (new)
