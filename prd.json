@@ -62,7 +62,7 @@
       "id": "JAL-003",
       "title": "Tiered Firewall & Policy Implementation",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "description": "Implement the deterministic policy firewall that classifies every action into a tier and enforces approval rules before execution proceeds.",
       "acceptanceCriteria": [
         "Tier 1 (auto-approve): read-only commands; package operations against the allowlist at ~/.apex/policy/package-allowlist.json.",

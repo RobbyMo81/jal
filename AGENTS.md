@@ -63,3 +63,36 @@ can consume. Do not build the UI.
 - `src/apex/docker/DockerEngine.ts` (new)
 - `src/apex/policy/PolicyFirewall.ts` (new)
 - `tests/docker/DockerEngine.test.ts` (new)
+
+## [JAL-003] — 2026-03-25
+### Pattern Discovered
+- Full tiered policy firewall is in `src/apex/policy/TieredFirewall.ts`.
+  `TieredFirewall` implements `IPolicyFirewall` so it drops directly into `ShellEngine`
+  and `DockerEngine` without any changes to those classes.
+- Tier classification order is: Tier 3 check → package-install allowlist check → Tier 2
+  check → Tier 1 default. This order matters — never reorder.
+- `ApprovalService` tokens are single-use (removed from pending map on first resolve).
+  `onApprovalRequired` callback is the ONLY mechanism to deliver the token to the
+  operator. Callers must wire this up or Tier 2 actions hang forever.
+- `AuditLog` is append-only JSONL at `~/.apex/audit/audit.log` with SHA-256 hash
+  chaining. Every `classify()` call writes at least one entry *before* execution proceeds.
+- `PackageAllowlist` file is at `~/.apex/policy/package-allowlist.json`. It caches in
+  memory but invalidates on every write so re-instantiation is not required between reads.
+### Gotcha
+- `ShellEngine.exec()` had `IPolicyFirewall` wired in the constructor but the `classify()`
+  call was missing from the exec path — added in JAL-003. If you see commands bypassing
+  the firewall from the shell engine, this is the place to check.
+- `AuditLog.ts` spread of `Omit<AuditEntry, ...>` triggers a TypeScript error when
+  `AuditEntry` has an index signature (`[key: string]: unknown`). Fix with `as AuditEntry`
+  cast — this is a known TS limitation, not a logic bug.
+- Tier 3 has zero bypass paths by design. `onApprovalRequired` is never called for Tier 3.
+  Do not add an override path.
+- `ApprovalService` TTL timer is 5 minutes (`TOKEN_TTL_MS`). Tests that use fake timers
+  must advance past this value or the promise will never resolve during the test run.
+### Files Modified
+- `src/apex/policy/TieredFirewall.ts` (new — full firewall implementation)
+- `src/apex/policy/ApprovalService.ts` (new — single-use token lifecycle)
+- `src/apex/policy/PackageAllowlist.ts` (new — versioned JSON allowlist with audit)
+- `src/apex/policy/AuditLog.ts` (new — JSONL with SHA-256 hash chaining)
+- `src/apex/shell/ShellEngine.ts` (modified — wired firewall.classify() into exec())
+- `tests/policy/TieredFirewall.test.ts` (new — 84 tests covering all acceptance criteria)

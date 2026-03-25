@@ -33,6 +33,46 @@ export interface ExecResult {
   duration_ms: number;
 }
 
+// ── Policy / Approval ─────────────────────────────────────────────────────────
+
+export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired';
+
+export interface ApprovalToken {
+  /** UUID assigned to this approval request. */
+  id: string;
+  /** Dot-namespaced action string, e.g. "shell.exec". */
+  action: string;
+  /**
+   * SHA-256 (truncated) of action + sorted context, excluding the
+   * approval_token key itself. Prevents one token from unlocking a
+   * different command than the one that requested approval.
+   */
+  context_hash: string;
+  tier: PolicyTier;
+  reason: string;
+  status: ApprovalStatus;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface PackageAllowlistEntry {
+  /** Package name as used by the package manager (e.g. "lodash", "requests"). */
+  name: string;
+  /** Package manager identifier: "npm" | "yarn" | "pip" | "apt". */
+  manager: string;
+  added_at: string;
+}
+
+export interface PackageAllowlistFile {
+  /**
+   * Monotonically increasing version counter.
+   * Incremented on every write so change history is traceable.
+   */
+  version: number;
+  updated_at: string;
+  entries: PackageAllowlistEntry[];
+}
+
 // ── API Response envelope ─────────────────────────────────────────────────────
 
 export interface ApiResponse<T = unknown> {

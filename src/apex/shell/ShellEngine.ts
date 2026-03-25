@@ -9,9 +9,11 @@
 //  - PID + output-ref tracking for crash recovery (consumed by JAL-007)
 //  - Command injection check on all inputs
 //  - sudo blocked unconditionally at this layer
+//  - Optional IPolicyFirewall (JAL-003): classify() called before spawn
 
 import { spawn, ChildProcess } from 'child_process';
 import { ExecOptions, ExecResult, ShellType } from '../types';
+import { IPolicyFirewall } from '../policy/PolicyFirewall';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -47,6 +49,17 @@ export interface ActiveExecution {
 
 export class ShellEngine {
   private readonly executions = new Map<string, ActiveExecution>();
+  private readonly firewall: IPolicyFirewall | null;
+
+  /**
+   * @param firewall  Optional policy firewall (JAL-003). When supplied, classify()
+   *                  is called before every exec(). If the decision is not approved,
+   *                  exec() throws without spawning any process.
+   *                  When omitted, only the built-in safety gates (sudo, injection) apply.
+   */
+  constructor(firewall?: IPolicyFirewall) {
+    this.firewall = firewall ?? null;
+  }
 
   // ── Static safety gates ──────────────────────────────────────────────────
 
@@ -118,6 +131,17 @@ export class ShellEngine {
     ShellEngine.checkSudo(command);
     // Safety gate 2 — injection
     ShellEngine.checkInjection(command);
+
+    // Policy firewall (JAL-003) — classify before any spawn
+    if (this.firewall) {
+      const decision = await this.firewall.classify('shell.exec', { command });
+      if (!decision.approved) {
+        throw new Error(
+          `[ShellEngine] POLICY GATE: Command blocked by firewall. ` +
+          `tier=${decision.tier} reason=${decision.reason}`
+        );
+      }
+    }
 
     const shell: ShellType = options.shell ?? 'bash';
     const timeoutMs = options.timeout_ms ?? DEFAULT_TIMEOUT_MS;
