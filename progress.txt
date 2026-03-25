@@ -30,3 +30,14 @@ STATUS: PASS | Session: forge-20260325062232-1899997 | Iteration: 2
 [2026-03-25] Story [JAL-006]: Heartbeat Scheduler & Maintenance Playbooks
 STATUS: PASS | Session: forge-20260325062232-1899997 | Iteration: 4
 ---
+
+[2026-03-25 13:57:20] JAL-007 (iter 5): PASS — Implemented JAL-007 Checkpoint-based Crash Recovery. Key changes:
+- src/apex/checkpoint/OutputStore.ts: SHA256 hash, 10KB inline/disk threshold, 7-day retention (APEX_OUTPUT_RETENTION_DAYS), hash verification on retrieve
+- src/apex/checkpoint/CheckpointStore.ts: atomic JSON read/write (write-to-temp + rename), latest.json pointer, list/delete/load operations
+- src/apex/checkpoint/CrashRecovery.ts: restore latest checkpoint, mark in_progress→interrupted, Tier 2 re-approval queue, INonRecoverableStateReset interface, output hash verification safety gate
+- src/apex/types/index.ts: added StepStatus, ToolCursor, ToolOutputRef, PendingApproval, CheckpointStep, Checkpoint types
+Quality gates: typecheck ✓, 393 tests ✓ (57 new)
+
+[2026-03-25] Story [JAL-007]: Checkpoint-based Crash Recovery
+STATUS: PASS | Session: forge-20260325062232-1899997 | Iteration: 5
+---

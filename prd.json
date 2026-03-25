@@ -152,7 +152,7 @@
       "id": "JAL-007",
       "title": "Checkpoint-based Crash Recovery",
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "description": "Persist task execution state continuously so interrupted work can resume quickly with explicit semantics for interrupted Tier 2 actions.",
       "acceptanceCriteria": [
         "Checkpoint schema (versioned JSON) includes: schema_version, task_id, goal, current_step, step_status, pending_approvals, tool_outputs_ref, policy_snapshot_hash, updated_at.",
