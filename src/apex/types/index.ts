@@ -319,6 +319,131 @@ export interface Checkpoint {
   updated_at: string;
 }
 
+// ── Memory Model ──────────────────────────────────────────────────────────────
+
+export type MemoryTier = 'short-term' | 'episodic' | 'durable';
+export type UserFeedback = 'thumbs-up' | 'thumbs-down';
+export type ContextSegment = 'system_policy' | 'active_task_state' | 'recent_actions' | 'retrieved_memory';
+export type ModelSize = 'large' | 'medium' | 'small';
+
+export interface MemoryItem {
+  /** UUID for this memory item. */
+  id: string;
+  tier: MemoryTier;
+  /** Text content of the memory item. */
+  content: string;
+  /** Searchable tags. */
+  tags: string[];
+  /** Workspace identifier (absolute path or logical name). */
+  workspace_id: string;
+  /** Session that created this item. */
+  session_id: string;
+  created_at: string;
+  last_accessed_at: string;
+  /** Number of times this item has been retrieved. */
+  access_count: number;
+  /** UTF-8 byte length of content. */
+  size_bytes: number;
+}
+
+export interface MemoryFeedbackRecord {
+  item_id: string;
+  session_id: string;
+  feedback: UserFeedback;
+  timestamp: string;
+}
+
+export interface FeedbackFile {
+  version: number;
+  updated_at: string;
+  records: MemoryFeedbackRecord[];
+}
+
+/**
+ * A memory item that has met the quantitative promotion criteria
+ * (≥2 sessions with positive feedback, confidence ≥0.8) and is
+ * awaiting explicit user approval before becoming durable.
+ */
+export interface PromotionCandidate {
+  item_id: string;
+  /** Number of unique sessions that gave positive feedback. */
+  session_count: number;
+  /** positive_feedback / total_feedback. Always in [0, 1]. */
+  confidence_score: number;
+  total_feedback: number;
+  positive_feedback: number;
+}
+
+export interface EpisodicMemoryFile {
+  version: number;
+  workspace_id: string;
+  /** Sum of size_bytes for all items. */
+  total_bytes: number;
+  updated_at: string;
+  items: MemoryItem[];
+}
+
+export interface DurableMemoryFile {
+  version: number;
+  updated_at: string;
+  items: MemoryItem[];
+}
+
+// ── Context Budget ─────────────────────────────────────────────────────────────
+
+export interface BudgetSegmentAllocation {
+  /** Percentage of usable_tokens allocated to this segment. */
+  percent: number;
+  /** Absolute token ceiling for this segment. */
+  tokens: number;
+}
+
+export interface ContextBudgetAllocation {
+  /** Full context window of the model. */
+  total_context_window: number;
+  /** Tokens available after scaling (1.0, 0.75, or 0.50). */
+  usable_tokens: number;
+  model_size: ModelSize;
+  system_policy: BudgetSegmentAllocation;
+  active_task_state: BudgetSegmentAllocation;
+  recent_actions: BudgetSegmentAllocation;
+  retrieved_memory: BudgetSegmentAllocation;
+}
+
+export interface ModelProfileOverrides {
+  system_policy_pct?: number;
+  active_task_state_pct?: number;
+  recent_actions_pct?: number;
+  retrieved_memory_pct?: number;
+}
+
+export interface ModelProfile {
+  model_id: string;
+  context_window: number;
+  budget_overrides?: ModelProfileOverrides;
+}
+
+export interface ModelProfilesFile {
+  version: number;
+  updated_at: string;
+  /** Key: model_id */
+  profiles: Record<string, ModelProfile>;
+}
+
+/**
+ * Result of chunking a large tool output for prompt context.
+ * Only the first/last 500 tokens are kept in the prompt; the full
+ * content is stored on disk and referenced by SHA256 hash.
+ */
+export interface ToolOutputChunk {
+  /** Prompt-safe content: first 500 + last 500 tokens. */
+  prompt_content: string;
+  /** Full output stored via OutputStore (SHA256-referenced). */
+  full_ref: ToolOutputRef;
+  /** True when content exceeded the 1000-token prompt threshold. */
+  was_chunked: boolean;
+}
+
 // ── Heartbeat & Playbooks ─────────────────────────────────────────────────────
 
 export type PlaybookTriggerType =

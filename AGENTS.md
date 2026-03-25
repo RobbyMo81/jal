@@ -295,3 +295,42 @@ can consume. Do not build the UI.
 ### GOTCHAS
 - **[JAL-007] tool_outputs_ref missing-file errors must block task resume**: CrashRecovery.recover() returns output_verification_errors. If non-empty, at least one on-disk output file is missing (expired/corrupted). Do NOT resume the task — the agent will be missing required tool context.
 
+
+## [JAL-008] — 2026-03-25
+### Pattern Discovered
+- Three-tier memory lives in `src/apex/memory/`: `EpisodicStore.ts`, `DurableStore.ts`, `FeedbackStore.ts`, `MemoryManager.ts`, `ContextBudget.ts`, `ModelProfiles.ts`.
+- `EpisodicStore` is workspace-scoped: one JSON file per workspace at `~/.apex/state/memory/episodic/<hash>_<safe-name>.json`. TTL is 30 days from last_accessed_at (reset on every retrieval). LRU eviction fires automatically after store() when total_bytes > 50 MB.
+- `FeedbackStore` enforces ballot-stuffing prevention: one record per (item_id, session_id) pair — later feedback for the same pair replaces the earlier one.
+- `ContextBudget.computeBudget()` classifies model size via `ModelProfiles.getModelSize()` and applies scaling (1.0 / 0.75 / 0.50). Minimum floors (system_policy ≥10%, active_task_state ≥15%) are enforced only for small models.
+- Tool output chunking in `ContextBudget.chunkToolOutput()` delegates full-content storage to `OutputStore` (reused from JAL-007). SHA256 hash appears in the separator comment so operators can locate the full file.
+- `MemoryManager.promoteToDurable()` is the single promotion gate: throws if `userApproved !== true`, if item not in episodic store, or if criteria not met. No code path bypasses this check.
+### Gotcha
+- `EpisodicStore.evict()` uses oldest `last_accessed_at` for LRU order. If you store an item and immediately call `get()`, the timestamp advances and the item becomes harder to evict — intentional TTL-reset behavior.
+- `ContextBudget.enforceLimit()` operates at item granularity (whole strings removed), not at character/byte level. If a single item is larger than the entire budget, the result is an empty array for that segment — the caller must guard against this.
+- `ModelProfiles` merges built-in defaults with the user's `~/.apex/config/model-profiles.json` on every load — new default entries appear without requiring a file migration.
+- Token approximation: 1 token ≈ 4 UTF-8 bytes. This is a heuristic — never use for exact billing.
+### Files Modified
+- `src/apex/memory/EpisodicStore.ts` (new)
+- `src/apex/memory/DurableStore.ts` (new)
+- `src/apex/memory/FeedbackStore.ts` (new)
+- `src/apex/memory/MemoryManager.ts` (new)
+- `src/apex/memory/ContextBudget.ts` (new)
+- `src/apex/memory/ModelProfiles.ts` (new)
+- `src/apex/types/index.ts` (extended — MemoryItem, MemoryFeedbackRecord, FeedbackFile, PromotionCandidate, EpisodicMemoryFile, DurableMemoryFile, ContextBudgetAllocation, BudgetSegmentAllocation, ModelProfile, ModelProfilesFile, ToolOutputChunk, MemoryTier, UserFeedback, ContextSegment, ModelSize)
+- `tests/memory/EpisodicStore.test.ts` (new)
+- `tests/memory/DurableStore.test.ts` (new)
+- `tests/memory/FeedbackStore.test.ts` (new)
+- `tests/memory/MemoryManager.test.ts` (new)
+- `tests/memory/ContextBudget.test.ts` (new)
+- `tests/memory/ModelProfiles.test.ts` (new)
+
+## Auto-compiled from FORGE Discoveries — 2026-03-25
+
+### PATTERNS
+- **[JAL-008] EpisodicStore workspace filename uses SHA256 prefix + safe name**: workspace_id hashed (first 8 hex) + sanitized to prevent collisions.
+- **[JAL-008] ContextBudget.enforceLimit() removes whole items not partial text**: Truncation is at item granularity. If single item exceeds full budget, segment empties. Callers must guard.
+- **[JAL-008] ModelProfiles merges built-in defaults on every load**: New default entries injected on load if missing — no migration needed.
+
+### GOTCHAS
+- **[JAL-008] MemoryManager.promoteToDurable() is the single auto-promotion safety gate**: Throws immediately if userApproved !== true. No bypass path exists.
+
