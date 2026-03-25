@@ -85,7 +85,7 @@
       "id": "JAL-004",
       "title": "Policy-Bounded File Operations",
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "description": "Implement file operation controls that enforce Tier 1/2 boundaries based on workspace roots and operation type.",
       "acceptanceCriteria": [
         "Tier 1 (auto-approved): create and edit files inside configured APEX_WORKSPACE_ROOTS.",
