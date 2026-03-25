@@ -95,6 +95,44 @@ export interface AuditEntry {
   [key: string]: unknown;
 }
 
+// ── File Operations ───────────────────────────────────────────────────────────
+
+export type FileOperationType = 'read' | 'write' | 'create' | 'delete' | 'chmod' | 'chown';
+
+export interface WorkspaceRootsFile {
+  /**
+   * Monotonically increasing version counter.
+   * Incremented on every write so change history is traceable.
+   */
+  version: number;
+  updated_at: string;
+  /** Absolute paths treated as workspace roots for Tier 1 file ops. */
+  roots: string[];
+}
+
+export interface FileOpOptions {
+  /** For delete — recursively remove directory tree (requires Tier 2 approval). */
+  recursive?: boolean;
+  /** For chmod — mode string or octal number (e.g. "644", 0o755). */
+  mode?: string | number;
+  /** For chown — owner name or UID. */
+  owner?: string;
+  /** For chown — group name or GID. */
+  group?: string;
+  /** For write/create — file content. */
+  content?: string;
+  /** For write — encoding (default: utf-8). */
+  encoding?: BufferEncoding;
+}
+
+export interface FileOpResult {
+  success: boolean;
+  tier_decision: TierDecision;
+  /** Populated for successful read operations. */
+  content?: string;
+  error?: string;
+}
+
 // ── Docker ────────────────────────────────────────────────────────────────────
 
 export type DockerOperationType = 'list' | 'start' | 'stop' | 'build' | 'inspect';

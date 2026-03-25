@@ -96,3 +96,61 @@ can consume. Do not build the UI.
 - `src/apex/policy/AuditLog.ts` (new — JSONL with SHA-256 hash chaining)
 - `src/apex/shell/ShellEngine.ts` (modified — wired firewall.classify() into exec())
 - `tests/policy/TieredFirewall.test.ts` (new — 84 tests covering all acceptance criteria)
+
+## [JAL-004] — 2026-03-25
+### Pattern Discovered
+- `PolicyFileOps` wraps all file I/O. Every operation resolves symlinks (via `realpathSync`)
+  before workspace boundary checks. For new files (not yet on disk), symlinks are resolved
+  on the parent directory.
+- `WorkspaceRootsConfig` is the authority for workspace roots. It caches the JSON file in
+  memory after first load. Cache is invalidated on every write (add/remove).
+- Shell profile detection is by **basename only** (`SHELL_PROFILE_NAMES` set) — a `.bashrc`
+  anywhere on the filesystem triggers Tier 2, even inside a workspace root.
+- System paths (`/etc/`, `/usr/`, `/bin/`, etc.) are caught by prefix match on the resolved
+  absolute path before workspace membership is tested.
+- Classification order for write/create: (1) shell profile name check → (2) system path
+  prefix check → (3) workspace root membership → (4) Tier 1 default.
+- `classify()` is a dry-run method that issues a real Tier 2 approval request. Wire
+  `onApprovalRequired` in tests or it will hang waiting for operator resolution.
+### Gotcha
+- Path traversal check inspects **raw input** (before `path.resolve()`). Any `..` segment
+  in the raw string is rejected with a structured error and an audit log entry. This check
+  must remain on the raw path — do not move it after `resolvePath()`.
+- `chownSync` requires numeric UID/GID on Linux. `PolicyFileOps.chown()` takes `uid: number`
+  and `gid: number` — do not pass strings. Tests should use `process.getuid!()` /
+  `process.getgid!()` to get valid IDs without needing elevated privileges.
+- `read` is unconditionally Tier 1. Reads are never gated, regardless of path.
+- All delete operations are Tier 2 — there is no Tier 1 delete path.
+### Files Modified
+- `src/apex/fileops/PolicyFileOps.ts` (new — policy-bounded file I/O)
+- `src/apex/fileops/WorkspaceRootsConfig.ts` (new — versioned workspace roots with audit)
+- `src/apex/types/index.ts` (extended — FileOperationType, WorkspaceRootsFile, FileOpOptions, FileOpResult)
+- `tests/fileops/PolicyFileOps.test.ts` (new — 63 tests covering all acceptance criteria)
+
+## Auto-compiled from FORGE Discoveries — 2026-03-25
+
+### PATTERNS
+- **[JAL-001] ShellEngine wraps all shell spawning**: Never call child_process.spawn directly — always use ShellEngine.exec() which enforces sudo block and injection checks.
+- **[JAL-001] Injection check allows pipes and redirects**: INJECTION_RE blocks ; backtick  ${} 
+ but NOT | or >. Pipes and redirects are considered legitimate shell constructs. Semicolons and command substitution are blocked.
+- **[JAL-002] DockerEngine uses IPolicyFirewall constructor injection — JAL-003 drops in without code changes**: DockerEngine accepts an optional IPolicyFirewall in its constructor. DockerStubFirewall is the default. When JAL-003 implements the real firewall, pass it to new DockerEngine(realFirewall). No changes to DockerEngine required.
+- **[JAL-003] TieredFirewall classification order**: Order is Tier3 → allowlist check → Tier2 → Tier1 default. Never reorder.
+- **[JAL-003] ApprovalService single-use tokens**: Tokens removed from pending map on first resolve — single-use by design. onApprovalRequired callback is the only delivery mechanism. If unset, Tier 2 hangs.
+- **[JAL-004] PolicyFileOps classification order for write/create**: Order: (1) shell profile name check via SHELL_PROFILE_NAMES set → (2) system path prefix check → (3) workspace root membership → (4) Tier 1 default. Never reorder.
+
+### GOTCHAS
+- **[JAL-001] SIGKILL escalation timer lingers in Jest**: The 2-second SIGKILL escalation in onAbort() keeps Jest open after cancellation tests. Add --forceExit to test:coverage if needed. Benign in production.
+- **[JAL-002] jest.useFakeTimers() in Jest 29 intercepts setImmediate — hangs spawn mock tests**: Using jest.useFakeTimers() when mock ChildProcess uses setImmediate to emit close events causes test hangs. Fix: use real timers with a very short timeout_ms (50ms) to test timeout logic instead of fake timers.
+- **[JAL-002] mockSpawn.mock.calls[0] bleeds across describe blocks without clearAllMocks in beforeEach**: In Jest, mock call history persists across describe blocks in the same file. Always add beforeEach(() => jest.clearAllMocks()) at the top of the test file when checking mock.calls[0] in multiple describes.
+- **[JAL-003] ShellEngine firewall was declared but not called**: ShellEngine.exec() had IPolicyFirewall in constructor but classify() was missing from exec path. Fixed in JAL-003 — always check firewall wiring when adding new engines.
+- **[JAL-003] AuditLog spread + index signature TS error**: Omit<AuditEntry,...> spread triggers TS error when interface has [key:string]:unknown. Fix: cast with as AuditEntry.
+- **[JAL-004] Path traversal check must run on raw input before path.resolve()**: The .. check in resolveSafe() runs on rawPath BEFORE resolve(). Do not move after resolution — resolve() collapses .. segments, defeating the check.
+- **[JAL-004] classify() awaits real Tier 2 approval — wire onApprovalRequired**: PolicyFileOps.classify() calls ApprovalService.requestApproval() for Tier 2 ops. If onApprovalRequired is not wired, classify() hangs indefinitely.
+
+### CONVENTIONS
+- **[JAL-001] ExecOptions.timeout_ms is per-command**: Policy layer (JAL-003) passes timeout_ms in ExecOptions to extend beyond the 900s default. Default is always 900000ms unless overridden.
+- **[JAL-003] Policy files location**: Package allowlist: ~/.apex/policy/package-allowlist.json. Audit log: ~/.apex/audit/audit.log. Both dirs created on first write.
+
+### DEPENDENCYS
+- **[JAL-001] JAL-007 reads getActiveExecutions()**: ShellEngine.getActiveExecutions() returns a ReadonlyMap of pid, command, startedAt, outputRef, cancelled. JAL-007 crash recovery depends on this surface being populated before exec() resolves.
+
