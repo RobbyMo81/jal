@@ -133,6 +133,58 @@ export interface FileOpResult {
   error?: string;
 }
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+export type AuthMethod = 'oauth' | 'device-code' | 'cli-hook' | 'api-key';
+export type AuthStatus = 'authenticated' | 'unauthenticated' | 'expired' | 'refreshing';
+
+export interface AuthSession {
+  provider: string;
+  status: AuthStatus;
+  expires_at: string | null;
+  auth_method: AuthMethod;
+  created_at: string;
+}
+
+/** Output contract for: apex auth login --provider <name> --json */
+export interface AuthLoginResult {
+  status: 'success' | 'failure';
+  provider: string;
+  expires_at: string | null;
+  message: string;
+}
+
+export interface ProviderConfig {
+  provider: string;
+  model: string;
+}
+
+// ── Provider Gateway ──────────────────────────────────────────────────────────
+
+export type MessageRole = 'user' | 'assistant' | 'system';
+
+export interface GatewayMessage {
+  role: MessageRole;
+  content: string;
+}
+
+export interface CompletionOptions {
+  max_tokens?: number;
+  temperature?: number;
+  /** Override the model from active session config. */
+  model?: string;
+}
+
+export interface CompletionResult {
+  content: string;
+  model: string;
+  provider: string;
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+  };
+}
+
 // ── Docker ────────────────────────────────────────────────────────────────────
 
 export type DockerOperationType = 'list' | 'start' | 'stop' | 'build' | 'inspect';

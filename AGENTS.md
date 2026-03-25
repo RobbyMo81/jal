@@ -154,3 +154,43 @@ can consume. Do not build the UI.
 ### DEPENDENCYS
 - **[JAL-001] JAL-007 reads getActiveExecutions()**: ShellEngine.getActiveExecutions() returns a ReadonlyMap of pid, command, startedAt, outputRef, cancelled. JAL-007 crash recovery depends on this surface being populated before exec() resolves.
 
+## [JAL-005] — 2026-03-25
+### Pattern Discovered
+- `AuthManager` in `src/apex/auth/AuthManager.ts` is the single authority for session lifecycle.
+  Inject `IKeychain` (OS-backed via `SecretToolKeychain`, test-double via `MemoryKeychain`).
+  Provider isolation is enforced by keying sessions as `session:<provider>` — getToken('anthropic')
+  physically cannot return an openai token.
+- `ProviderGateway` in `src/apex/auth/ProviderGateway.ts` is the provider-agnostic inference entry point.
+  Register adapters via `registerAdapter()`; switch active config with `switchConfig()`. No code
+  changes required when adding a new provider — register a new `IProviderAdapter`.
+- `ConfigGuiBridge` invokes `/home/spoq/ai-vision/tools/config-gui/target/release/ai-vision-config`
+  for provider/model selection only. It NEVER reads API key values from the env file the binary writes.
+  Credentials are handled exclusively by `AuthManager` + `IKeychain`.
+- CLI hook contract: `apex auth login --provider <name> --json` → `{ status, provider, expires_at, message }`
+  exit 0/1. Source: `src/apex/cli/auth-login.ts`.
+- `IAuditLog` interface (from JAL-003) is the audit injection point for all auth actions. Pass
+  `NoOpAuditLog` in tests, `AuditLog` in production.
+### Gotcha
+- `SecretToolKeychain.set()` sends the secret via stdin (not argv) to avoid it appearing in the
+  process list. On headless VPS, `secret-tool` requires a D-Bus session + libsecret daemon running.
+  Call `SecretToolKeychain.verify()` at startup and handle the thrown error gracefully.
+- Config-GUI binary must be compiled before use: `cargo build --release` in
+  `/home/spoq/ai-vision/tools/config-gui`. If missing, `ConfigGuiBridge.launch()` returns null
+  (non-fatal). Do NOT block on binary availability — always emit the warning and continue.
+- `AuthManager.doRefresh()` is a Phase 1 stub — always returns null. Future: delegate to
+  `IProviderAdapter.refresh()` once OAuth endpoints are implemented per-provider.
+- Provider name validation uses `/^[a-z][a-z0-9-]*$/`. Any uppercase, space, or special char
+  fails login immediately. CLI tools must lowercase provider names before passing.
+### Files Modified
+- `src/apex/types/index.ts` (extended — AuthMethod, AuthStatus, AuthSession, AuthLoginResult, ProviderConfig, GatewayMessage, CompletionOptions, CompletionResult)
+- `src/apex/auth/IKeychain.ts` (new — OS-backed secret storage interface)
+- `src/apex/auth/MemoryKeychain.ts` (new — test double, in-memory only)
+- `src/apex/auth/SecretToolKeychain.ts` (new — Linux libsecret via secret-tool subprocess)
+- `src/apex/auth/AuthManager.ts` (new — session lifecycle, provider isolation, logout)
+- `src/apex/auth/ProviderGateway.ts` (new — provider-agnostic gateway, StubProviderAdapter)
+- `src/apex/auth/ConfigGuiBridge.ts` (new — launches config-gui binary, fallback warning)
+- `src/apex/cli/auth-login.ts` (new — CLI hook with JSON contract)
+- `tests/auth/AuthManager.test.ts` (new — 35 tests)
+- `tests/auth/ProviderGateway.test.ts` (new — 10 tests)
+- `tests/auth/ConfigGuiBridge.test.ts` (new — 12 tests)
+
