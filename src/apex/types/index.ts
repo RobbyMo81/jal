@@ -218,3 +218,81 @@ export interface DockerActiveOperation {
   outputRef: string;
   cancelled: boolean;
 }
+
+// ── Heartbeat & Playbooks ─────────────────────────────────────────────────────
+
+export type PlaybookTriggerType =
+  | 'high_disk_pressure'
+  | 'service_down'
+  | 'memory_pressure'
+  | 'failed_task'
+  | 'custom';
+
+export interface PlaybookTrigger {
+  type: PlaybookTriggerType;
+  /** For service_down: the service/command to probe. */
+  service?: string;
+  /** For custom: a shell test expression (evaluated with bash -c). */
+  expression?: string;
+}
+
+export interface PlaybookStep {
+  name: string;
+  command: string;
+  /** Per-step timeout in seconds (default: max_runtime). */
+  timeout?: number;
+}
+
+export type RollbackFailurePolicy = 'degrade' | 'ignore' | 'alert';
+
+export interface PlaybookDefinition {
+  name: string;
+  description: string;
+  /** staging=true → queued for operator review; staging=false → eligible for execution. */
+  staging: boolean;
+  triggers: PlaybookTrigger[];
+  steps: PlaybookStep[];
+  /** Maximum total runtime in seconds across all steps. */
+  max_runtime: number;
+  rollback_commands: string[];
+  rollback_failure_policy: RollbackFailurePolicy;
+}
+
+export interface PlaybookHealthEntry {
+  playbook: string;
+  degraded: boolean;
+  degraded_at?: string;
+  degraded_reason?: string;
+  last_run?: string;
+  last_exit_code?: number;
+}
+
+export interface PlaybookHealthFile {
+  version: number;
+  updated_at: string;
+  playbooks: Record<string, PlaybookHealthEntry>;
+}
+
+export type HeartbeatCheckType =
+  | 'disk_pressure'
+  | 'process_health'
+  | 'container_status'
+  | 'failed_job'
+  | 'playbook_execution';
+
+export interface HeartbeatCheckResult {
+  check: HeartbeatCheckType | string;
+  healthy: boolean;
+  exit_code: number;
+  output: string;
+  checked_at: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface HeartbeatCycleResult {
+  cycle_at: string;
+  checks: HeartbeatCheckResult[];
+  playbooks_triggered: string[];
+  playbooks_staged: string[];
+  errors: string[];
+}

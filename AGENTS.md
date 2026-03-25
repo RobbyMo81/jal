@@ -194,3 +194,55 @@ can consume. Do not build the UI.
 - `tests/auth/ProviderGateway.test.ts` (new — 10 tests)
 - `tests/auth/ConfigGuiBridge.test.ts` (new — 12 tests)
 
+
+## [JAL-006] — 2026-03-25
+### Pattern Discovered
+- `YamlPlaybookParser` uses a hand-rolled minimal YAML parser (no external deps). It handles only
+  the playbook schema: top-level scalars, flat sequences, and one level of mapping within sequences.
+  Do NOT add anchors or multi-document support — keep it minimal.
+- Circular recursive type aliases (`type YamlMap = Record<string, YamlNode>`) cause TS2456 in
+  strict mode. Fix: replace `type` with `interface` — interfaces allow forward/circular references.
+  Pattern: `interface YamlMap { [key: string]: YamlNode; }` + `interface YamlList extends Array<YamlNode> {}`.
+- `HeartbeatScheduler` wires `HealthChecks`, `PlaybookRunner`, and `PlaybookHealthStore` via
+  constructor injection. Test overrides: pass `MockShell`, `MemoryPlaybookHealthStore`, and
+  `CapturingAuditLog` (all from test doubles in respective source files).
+- `DiskPressureTracker` is stateful: first-high timestamp is tracked in-memory across cycles.
+  Tests inject a past timestamp via `setFirstHighAt()` to simulate sustained pressure without sleeping.
+- `checkMemoryPressure()` uses `check: 'process_health'` as check name (not 'memory_pressure') to
+  avoid collision. PlaybookRunner's `memory_pressure` trigger case matches on `check === 'process_health'`
+  with `available_mb` metadata. This is by design — do not rename without updating both sides.
+### Gotcha
+- `ExecSyncShell` (production) uses `execSync` which runs synchronously. It is fine for brief health
+  checks (5–10 s timeout) but would block the event loop for longer ops. Playbook steps use it too —
+  keep step commands short or lower `max_runtime`.
+- The `--forceExit` flag is needed in Jest because `setInterval` in `HeartbeatScheduler` keeps the
+  event loop open even after tests. Tests that start the scheduler MUST call `stop()` in `afterEach`
+  or use `jest --forceExit`. The jest config should include `--forceExit` in the test script.
+- `staging=false` is a strict safety gate: PlaybookRunner.evaluateTriggers() checks `pb.staging === true`
+  explicitly — any truthy value (including undefined) skips execution. Playbooks without `staging` field
+  will fail YAML validation before reaching this gate.
+### Files Modified
+- `src/apex/heartbeat/YamlPlaybookParser.ts` (new — custom YAML parser; fixed circular type aliases)
+- `src/apex/heartbeat/PlaybookHealthStore.ts` (new — playbook-health.json manager with atomic writes)
+- `src/apex/heartbeat/HealthChecks.ts` (new — read-only health checks with DiskPressureTracker)
+- `src/apex/heartbeat/PlaybookRunner.ts` (new — trigger evaluation, step execution, rollback, degrade)
+- `src/apex/heartbeat/HeartbeatScheduler.ts` (new — configurable interval scheduler, prompt template)
+- `src/apex/types/index.ts` (extended — Playbook*, Heartbeat* types)
+- `tests/heartbeat/HeartbeatScheduler.test.ts` (new — 75 tests covering all acceptance criteria)
+
+## Auto-compiled from FORGE Discoveries — 2026-03-25
+
+### PATTERNS
+- **[JAL-005] AuthManager is the sole session authority — inject IKeychain**: AuthManager in src/apex/auth/AuthManager.ts manages all session lifecycle. Inject IKeychain (SecretToolKeychain in prod, MemoryKeychain in tests). Provider isolation enforced by keying sessions as session:<provider> — structural impossibility of cross-provider token reuse.
+- **[JAL-005] ProviderGateway normalizes all inference — register adapters, no code changes**: ProviderGateway in src/apex/auth/ProviderGateway.ts is the provider-agnostic inference entry point. Register IProviderAdapter instances at startup. switchConfig() changes provider+model. StubProviderAdapter is the Phase 1 stand-in.
+
+### GOTCHAS
+- **[JAL-005] SecretToolKeychain requires D-Bus + libsecret daemon on headless VPS**: secret-tool is a D-Bus client. On headless VPS (Hostinger), the libsecret daemon may not be running. Call SecretToolKeychain.verify() at startup and handle the thrown error — fall back to prompting re-login rather than crashing.
+- **[JAL-005] ConfigGuiBridge binary must be compiled before use — cargo build --release**: The config-gui binary at /home/spoq/ai-vision/tools/config-gui/target/release/ai-vision-config must be compiled. If absent, ConfigGuiBridge.launch() returns null with a non-fatal warning. Never block on binary availability.
+- **[JAL-005] AuthManager.doRefresh() is a Phase 1 stub — always returns null**: Refresh requires provider-specific OAuth endpoints. Phase 1 stub logs a warn and returns null. Future: delegate to IProviderAdapter.refresh(). For now, expired tokens always require re-login.
+- **[JAL-006] TypeScript circular type aliases cause TS2456 — use interfaces**: type YamlMap = Record<string, YamlNode> fails with TS2456. Fix: interface YamlMap { [key: string]: YamlNode; } + interface YamlList extends Array<YamlNode> {}.
+- **[JAL-006] Jest --forceExit needed for HeartbeatScheduler setInterval leak**: setInterval in HeartbeatScheduler keeps Jest process open. Tests must call stop() in afterEach or use --forceExit.
+
+### CONVENTIONS
+- **[JAL-005] Provider name validation: /^[a-z][a-z0-9-]*$/**: All provider names must match /^[a-z][a-z0-9-]*$/. Uppercase, spaces, or special chars fail immediately. CLI tools must lowercase before passing to AuthManager.login().
+
