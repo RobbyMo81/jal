@@ -18,3 +18,9 @@ STATUS: PASS | Session: forge-20260324215726-1658598 | Iteration: 8
 [2026-03-25] Story [JAL-004]: Policy-Bounded File Operations
 STATUS: PASS | Session: forge-20260324215726-1658598 | Iteration: 10
 ---
+
+[2026-03-25 13:35:43] JAL-005 (iter 2): PASS — Implemented JAL-005 Integrated Model Switching & Auth Flow. 49 new auth tests (261 total), typecheck clean. AuthManager+ProviderGateway+IKeychain+SecretToolKeychain+ConfigGuiBridge+CLI hook implemented.
+
+[2026-03-25] Story [JAL-005]: Integrated Model Switching & Auth Flow
+STATUS: PASS | Session: forge-20260325062232-1899997 | Iteration: 2
+---

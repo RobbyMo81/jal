@@ -105,7 +105,7 @@
       "id": "JAL-005",
       "title": "Integrated Model Switching & Auth Flow",
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "description": "Provide a provider-agnostic login and model switching flow using the shared config GUI, with secure OS-backed credential handling and deterministic fallback.",
       "acceptanceCriteria": [
         "Users log in without API key entry in the standard flow; auth uses OAuth, device-code, session auth, or CLI hooks.",
