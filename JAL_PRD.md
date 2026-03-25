@@ -473,9 +473,9 @@ Actor-to-local identity mapping is stored in ~/.apex/config/plugin-actors.json (
 }
 ```
 
-Setup flow:
-1. Operator manually creates or edits plugin-actors.json with Slack display names / Telegram user IDs and corresponding local Apex identities.
-2. Canvas shows a setup guide suggesting import from current Slack workspace members or Telegram contacts (operator still confirms each mapping).
+Setup flow (two options):
+1. **Manual entry** (recommended for high security): Operator manually edits plugin-actors.json with Slack display names / Telegram user IDs and corresponding local Apex identities. No additional API scopes required beyond `chat:write` + `interactions:read`.
+2. **Assisted import** (convenience): Canvas optionally shows a setup guide suggesting one-time import from current Slack workspace members or Telegram contacts. Operator still confirms each mapping individually. If enabled, requires `users:read` (Slack), `conversations:read` (Slack), and standard Telegram permissions. If operator opts out of import, skip this step and restrict bot scopes to `chat:write` + `interactions:read`.
 3. Unmapped actors in inbound actions are rejected with audit log entry and optional Canvas notification to operator.
 
 **14.5.2 Role Policy for Approval Classes**
@@ -499,7 +499,7 @@ Approval tokens are issued at the moment Canvas sends an approval request:
 2. Generates single-use, TTL-bound (10-min default) approval tokens.
 3. Sends tokens only in the approval message to that actor (not broadcast to channel).
 4. Tokens encode workspace_id, approval_id, and required_role in signed payload (verified on inbound callback).
-5. If multiple actors should approve in sequence, separate approval requests with separate tokens are issued.
+5. **Note**: Sequential multi-party approval (require approval from multiple distinct actors in sequence) is **not in Phase 2 scope**. Phase 2 supports single-approver or parallel-quorum models (all actors must approve); sequential approval semantics are deferred to Phase 3. For Phase 2, separate approves are isolated decisions, not ordered steps.
 
 **14.5.4 Unmapped Actor Behavior**
 When an inbound action includes actor_id that does not exist in plugin-actors.json:

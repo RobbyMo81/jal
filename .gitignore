@@ -1,0 +1,8 @@
+# FORGE hidden workspace
+.forge/
+
+# FORGE memory DB — runtime working directory, not source of record
+forge-memory.db
+forge-memory.db-shm
+forge-memory.db-wal
+forge-startup-report.md

@@ -1,0 +1,196 @@
+{
+  "projectName": "Project Apex",
+  "branchName": "apex/mvp-core",
+  "description": "Project Apex is a local-first autonomous agent that executes real work on the host machine instead of returning instructions for humans to execute. The system is designed for power users managing development environments, containers, and local automation flows. Apex runs with direct system access under a strict policy firewall, produces complete audit trails, and keeps operational data local by default.",
+  "techStack": [
+    "Node.js",
+    "TypeScript",
+    "SQLite (better-sqlite3)",
+    "Docker",
+    "OAuth / Session Auth",
+    "zod"
+  ],
+  "qualityGates": [
+    "npm run typecheck",
+    "npm test",
+    "startup audit integrity verification"
+  ],
+  "userStories": [
+    {
+      "id": "JAL-001",
+      "title": "Native Shell Execution Engine",
+      "priority": 1,
+      "passes": true,
+      "description": "Implement a robust shell execution wrapper with support for bash/zsh/powershell, incremental output streaming, user cancellation, and bounded timeouts.",
+      "acceptanceCriteria": [
+        "Supports bash, zsh, and powershell as selectable shell types.",
+        "Output streams incrementally via child_process.spawn (not exec); consumers receive chunks as they arrive.",
+        "User can cancel any running command at any time; the process is killed and cancellation is recorded.",
+        "Default force-timeout is 15 minutes (900s); policy can extend per-command.",
+        "Each execution records its PID and output ref in local state for crash recovery use by JAL-007.",
+        "Command injection check: reject shell metacharacters in untrusted input before execution.",
+        "sudo execution is blocked at this layer (deferred to Tier 3 policy in JAL-003)."
+      ],
+      "technicalNotes": "Use child_process.spawn for streaming. Record PIDs and output refs in local state for cancellation and crash recovery. ExecOptions and ExecResult types are defined in src/apex/types/index.ts — use them.",
+      "safetyGates": [
+        "Command injection check on all inputs",
+        "sudo blocked unconditionally at execution layer"
+      ]
+    },
+    {
+      "id": "JAL-002",
+      "title": "Docker Lifecycle Integration",
+      "priority": 2,
+      "passes": false,
+      "description": "Add native Docker tools for listing, starting, stopping, building, and inspecting local containers. All Docker operations flow through the policy firewall.",
+      "acceptanceCriteria": [
+        "Supports list, start, stop, build, and inspect operations against the local Docker daemon.",
+        "Output streams incrementally to callers (same streaming contract as JAL-001 shell execution).",
+        "User can cancel any in-flight Docker operation; the operation is terminated and logged.",
+        "Default force-timeout is 15 minutes unless policy extends it.",
+        "Docker socket or group access is preferred; privileged execution is blocked by default and requires an explicit user-approved policy exception.",
+        "Every Docker operation is classified by the policy firewall (JAL-003) before execution; destructive ops (docker prune, rm) require Tier 2 approval.",
+        "Docker privilege model violations are audit-logged with action, tier, and reason."
+      ],
+      "technicalNotes": "Use Docker CLI via child_process.spawn (streaming) or dockerode SDK. Privilege checks are delegated to the JAL-003 policy firewall — do not re-implement tier logic here. Prefer docker socket/group access over --privileged.",
+      "safetyGates": [
+        "Privileged mode blocked by default",
+        "docker prune and rm classified as Tier 2 destructive ops"
+      ]
+    },
+    {
+      "id": "JAL-003",
+      "title": "Tiered Firewall & Policy Implementation",
+      "priority": 3,
+      "passes": false,
+      "description": "Implement the deterministic policy firewall that classifies every action into a tier and enforces approval rules before execution proceeds.",
+      "acceptanceCriteria": [
+        "Tier 1 (auto-approve): read-only commands; package operations against the allowlist at ~/.apex/policy/package-allowlist.json.",
+        "Tier 2 (HITL required): destructive operations (rm, docker prune, chmod); non-trivial file modifications; system-level changes; SSH task execution.",
+        "Tier 3 (blocked by default): sudo execution; network configuration changes; user and permission manipulation.",
+        "Every executed action has a tier classification and a TierDecision record written to the audit log before execution.",
+        "Tier 2 actions pause execution and emit an approval request; execution resumes only after explicit approval is received.",
+        "Tier 3 actions are rejected immediately with a structured error and an audit log entry; no bypass path exists.",
+        "The package allowlist at ~/.apex/policy/package-allowlist.json is versioned, user-editable, and every change is audit-logged.",
+        "Policy enforcement is a wrapper layer: execution engines (JAL-001, JAL-002) call the firewall before running any command."
+      ],
+      "technicalNotes": "Firewall wraps both the shell execution engine (JAL-001) and Docker integration (JAL-002). Policy files live under ~/.apex/policy/. All policy file changes must be audit-logged. Approval tokens for Tier 2 are single-use and short-lived.",
+      "safetyGates": [
+        "Allowlist validation before Tier 1 package ops",
+        "Approval token integrity check before Tier 2 execution",
+        "Zero Tier 3 bypass paths"
+      ]
+    },
+    {
+      "id": "JAL-004",
+      "title": "Policy-Bounded File Operations",
+      "priority": 4,
+      "passes": false,
+      "description": "Implement file operation controls that enforce Tier 1/2 boundaries based on workspace roots and operation type.",
+      "acceptanceCriteria": [
+        "Tier 1 (auto-approved): create and edit files inside configured APEX_WORKSPACE_ROOTS.",
+        "Tier 2 (HITL required): recursive deletes (rm -r), chmod/chown, writes outside workspace roots, shell profile edits (.bashrc, .zshrc, etc.), and system file edits (/etc/, /usr/, etc.).",
+        "Workspace roots are configurable in ~/.apex/policy/workspace-roots.json and changes are audit-logged.",
+        "Operations outside policy boundaries are rejected with a structured error and an audit log entry.",
+        "File operation decisions emit TierDecision records to the audit log with action, tier, and reason fields."
+      ],
+      "technicalNotes": "Wrap all file I/O through a PolicyFileOps class that checks paths against workspace roots before execution. Path resolution must be absolute (resolve symlinks) before boundary checks. See PRD §5.2 for full governance model.",
+      "safetyGates": [
+        "Path traversal check (reject ../ escapes)",
+        "Symlink resolution before boundary check",
+        "Audit log entry on every rejection"
+      ]
+    },
+    {
+      "id": "JAL-005",
+      "title": "Integrated Model Switching & Auth Flow",
+      "priority": 5,
+      "passes": false,
+      "description": "Provide a provider-agnostic login and model switching flow using the shared config GUI, with secure OS-backed credential handling and deterministic fallback.",
+      "acceptanceCriteria": [
+        "Users log in without API key entry in the standard flow; auth uses OAuth, device-code, session auth, or CLI hooks.",
+        "Model configuration uses the shared config GUI component at /home/spoq/ai-vision/tools/config-gui; if unavailable, fall back to a bundled equivalent and show a non-fatal warning.",
+        "CLI hook contract: `apex auth login --provider <name> --json` writes `{ status, provider, expires_at, message }` to stdout and exits 0 on success or 1 on failure.",
+        "Provider and model switches require no code changes; the provider-agnostic gateway normalizes completion, tool-calling, streaming, and error handling.",
+        "Provider sessions are isolated; a provider switch cannot reuse tokens from a different provider.",
+        "Tokens and session references are stored only in OS-backed secure storage; never in plaintext files or env vars.",
+        "Expired tokens auto-refresh when possible; if refresh fails, a re-login prompt appears.",
+        "Logout removes all local session artifacts and blocks further inference until re-auth.",
+        "Median switch time target is under 2 minutes, excluding external consent delays."
+      ],
+      "technicalNotes": "Reuse /home/spoq/ai-vision/tools/config-gui (Rust/Cargo binary). Store tokens only in OS keychain (keytar or equivalent). Never write credentials to forge-memory.db, .env, or any plaintext file.",
+      "safetyGates": [
+        "No plaintext credentials anywhere on disk",
+        "Cross-provider token reuse blocked",
+        "Logout verified to clear all session artifacts"
+      ]
+    },
+    {
+      "id": "JAL-006",
+      "title": "Heartbeat Scheduler & Maintenance Playbooks",
+      "priority": 6,
+      "passes": false,
+      "description": "Implement a configurable heartbeat loop that performs read-only health checks and executes pre-approved maintenance playbooks with full audit trails.",
+      "acceptanceCriteria": [
+        "Heartbeat runs on a 5-minute interval by default; interval is configurable 1–30 minutes via APEX_HEARTBEAT_INTERVAL_SEC.",
+        "Default heartbeat checks are read-only: process health, disk pressure (≥85% sustained 5 min), container status, and failed job detection.",
+        "Maintenance playbooks are YAML files at ~/.apex/policy/playbooks/{name}.yaml with required fields: name, description, triggers, steps, max_runtime, rollback_commands, rollback_failure_policy.",
+        "Trigger thresholds: high_disk_pressure (root fs ≥85% for ≥5 min), service_down (non-zero exit or timeout), memory_pressure (<512 MB available), failed_task (task marked failed with no retry in-flight). Custom triggers may be shell test expressions.",
+        "Only playbooks with staging=false execute; staging=true playbooks are queued for operator review and blocked from execution.",
+        "Rollback failure handling: if rollback_commands fail, mark the playbook degraded in ~/.apex/state/playbook-health.json, alert the operator, and do not retry until the operator clears the degraded flag.",
+        "All heartbeat actions (checks and playbook executions) are audit-logged with timestamp, action, exit code, and output refs.",
+        "A failed playbook step is logged but does not halt the heartbeat; execution continues to the next scheduled cycle."
+      ],
+      "technicalNotes": "Heartbeat runs as a background scheduler (setInterval or equivalent). Playbooks require explicit Canvas/operator approval (staging=false) before heartbeat can execute them. Heartbeat uses a dedicated compact prompt template: ~/.apex/policy/prompts/heartbeat.v{n}.md.",
+      "safetyGates": [
+        "staging=false required before any playbook execution",
+        "Rollback failure triggers degraded state and operator alert",
+        "All heartbeat actions audit-logged"
+      ]
+    },
+    {
+      "id": "JAL-007",
+      "title": "Checkpoint-based Crash Recovery",
+      "priority": 7,
+      "passes": false,
+      "description": "Persist task execution state continuously so interrupted work can resume quickly with explicit semantics for interrupted Tier 2 actions.",
+      "acceptanceCriteria": [
+        "Checkpoint schema (versioned JSON) includes: schema_version, task_id, goal, current_step, step_status, pending_approvals, tool_outputs_ref, policy_snapshot_hash, updated_at.",
+        "tool_outputs_ref stores a SHA256 hash pointing to output files at ~/.apex/state/outputs/; any output exceeding 10 KB is written to disk and referenced by hash rather than inlined.",
+        "Output files are retained for 7 days (configurable via APEX_OUTPUT_RETENTION_DAYS) and cleaned up automatically.",
+        "Resumable tool cursors (e.g., line position in log streams, pagination tokens) are stored in the completed step's cursor field so tools resume from their last position on recovery.",
+        "On crash recovery: restore the latest checkpoint, mark all in-flight steps as interrupted, and require re-approval for any interrupted Tier 2 actions before resuming.",
+        "Target MTTR is under 10 seconds from process restart to resumed task execution.",
+        "Non-recoverable state (subprocess handles, network sockets, timer handlers) is explicitly reset on recovery without attempting to restore it."
+      ],
+      "technicalNotes": "Store checkpoints as versioned JSON in ~/.apex/state/. Hash tool outputs with SHA256 and write large outputs to ~/.apex/state/outputs/. Checkpoint recovery code must resolve hash → file path and read content on demand. See PRD §7.2–7.3 for full schema and cursor spec.",
+      "safetyGates": [
+        "SHA256 output hash verification on recovery",
+        "Tier 2 re-approval enforced after any crash interruption"
+      ]
+    },
+    {
+      "id": "JAL-008",
+      "title": "Memory Model & Context Budgeting",
+      "priority": 8,
+      "passes": false,
+      "description": "Implement three-tier memory (short-term, episodic, durable) with deterministic context budget enforcement and model-size-aware allocation.",
+      "acceptanceCriteria": [
+        "Three memory tiers: short-term (active task only), episodic (30-day TTL from last access, 50 MB quota per workspace, LRU eviction on overflow), durable (explicit user approval required for promotion).",
+        "Durable promotion requires all three: usefulness across at least 2 independent sessions, confidence score ≥0.8 (calculated as positive_feedback_count / total_retrievals per session from explicit user thumbs-up/down only), and explicit user approval.",
+        "Context budget partition defaults: 25% system policy, 35% active task state, 25% recent actions, 15% retrieved memory.",
+        "Large models (≥100K tokens): use default 25/35/25/15 split.",
+        "Medium models (16K–100K tokens): scale total usable budget by ×0.75; percentages remain 25/35/25/15.",
+        "Small models (<16K tokens): scale by ×0.50; minimum floors enforced — system_policy never below 10%, active_task never below 15%.",
+        "On context limit breach: truncate in order — retrieved_memory (oldest first) → recent_actions (oldest first) → active_task_state (lowest relevance) → system_policy (never truncated).",
+        "Large tool outputs are chunked: retain first 500 and last 500 tokens in prompt context; store raw output at ~/.apex/state/outputs/ referenced by SHA256 hash.",
+        "Budget percentages are user-configurable per model profile in ~/.apex/config/model-profiles.json."
+      ],
+      "technicalNotes": "Confidence scoring is user-feedback-driven only — never LLM-determined, to ensure determinism and auditability. Episodic memory items become durable promotion candidates after meeting all three criteria; candidates are surfaced for explicit operator approval. See PRD §8.1–8.2 for full memory review UX spec (Phase 2 UI; Phase 1 implements the data layer and promotion logic only).",
+      "safetyGates": [
+        "Durable promotion requires explicit user approval — no auto-promotion",
+        "system_policy context segment is never truncated"
+      ]
+    }
+  ]
+}
