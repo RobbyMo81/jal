@@ -41,7 +41,7 @@
       "id": "JAL-002",
       "title": "Docker Lifecycle Integration",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "description": "Add native Docker tools for listing, starting, stopping, building, and inspecting local containers. All Docker operations flow through the policy firewall.",
       "acceptanceCriteria": [
         "Supports list, start, stop, build, and inspect operations against the local Docker daemon.",
