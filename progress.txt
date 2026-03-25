@@ -43,3 +43,7 @@ STATUS: PASS | Session: forge-20260325062232-1899997 | Iteration: 5
 ---
 
 [2026-03-25 14:10:59] JAL-008 (iter 7): PASS — Implemented JAL-008 Memory Model & Context Budgeting. EpisodicStore (30-day TTL, 50MB LRU), DurableStore (user-approval gate), FeedbackStore (user-feedback confidence scoring), MemoryManager (three-tier orchestration + promotion gate), ContextBudget (model-size-aware allocation + tool output chunking), ModelProfiles. typecheck pass, 489 tests pass (96 memory tests). All 8 stories JAL-001 through JAL-008 now pass.
+
+[2026-03-25] Story [JAL-008]: Memory Model & Context Budgeting
+STATUS: PASS | Session: forge-20260325062232-1899997 | Iteration: 7
+---

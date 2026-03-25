@@ -173,7 +173,7 @@
       "id": "JAL-008",
       "title": "Memory Model & Context Budgeting",
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "description": "Implement three-tier memory (short-term, episodic, durable) with deterministic context budget enforcement and model-size-aware allocation.",
       "acceptanceCriteria": [
         "Three memory tiers: short-term (active task only), episodic (30-day TTL from last access, 50 MB quota per workspace, LRU eviction on overflow), durable (explicit user approval required for promotion).",
