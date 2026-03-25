@@ -129,7 +129,7 @@
       "id": "JAL-006",
       "title": "Heartbeat Scheduler & Maintenance Playbooks",
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "description": "Implement a configurable heartbeat loop that performs read-only health checks and executes pre-approved maintenance playbooks with full audit trails.",
       "acceptanceCriteria": [
         "Heartbeat runs on a 5-minute interval by default; interval is configurable 1–30 minutes via APEX_HEARTBEAT_INTERVAL_SEC.",
