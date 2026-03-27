@@ -23,6 +23,8 @@
 
 import * as http from 'http';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import { URL } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { EventBus } from './EventBus';
@@ -43,6 +45,28 @@ import { handleApprove, handleDeny, isAuthorized } from './routes/approvalRoutes
 
 const DEFAULT_PORT = 7474;
 const DEFAULT_HOST = '127.0.0.1';
+
+/**
+ * Path to the Vite-built Canvas frontend dist directory.
+ * Resolved relative to this file so it works regardless of cwd.
+ */
+const UI_DIST_DIR = path.resolve(__dirname, 'ui', 'dist');
+
+/** MIME type map for static file serving */
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js':   'application/javascript; charset=utf-8',
+  '.mjs':  'application/javascript; charset=utf-8',
+  '.css':  'text/css; charset=utf-8',
+  '.svg':  'image/svg+xml',
+  '.png':  'image/png',
+  '.ico':  'image/x-icon',
+  '.json': 'application/json; charset=utf-8',
+  '.map':  'application/json; charset=utf-8',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf':  'font/ttf',
+};
 
 // ── CanvasServerDeps ──────────────────────────────────────────────────────────
 
@@ -284,6 +308,12 @@ export class CanvasServer {
       return;
     }
 
+    // GET /canvas and GET /canvas/* — serve static frontend files
+    if (method === 'GET' && (pathname === '/canvas' || pathname.startsWith('/canvas/'))) {
+      this.serveStatic(req, res, pathname);
+      return;
+    }
+
     // GET /status
     if (method === 'GET' && pathname === '/status') {
       handleStatus(req, res, { getSnapshot: this.deps.getSnapshot });
@@ -347,6 +377,90 @@ export class CanvasServer {
   }
 
   // ── Private ───────────────────────────────────────────────────────────────
+
+  /**
+   * Serve static files from the Canvas UI dist directory.
+   * Route: GET /canvas and GET /canvas/*
+   *
+   * - /canvas and /canvas/ serve index.html with the session token injected.
+   * - /canvas/assets/... serves Vite-emitted asset files directly.
+   * - For all other sub-paths, falls back to index.html (SPA single-page behaviour).
+   *
+   * If dist/ does not exist (i.e. the frontend has not been built), returns 404
+   * with a plain-text hint rather than crashing.
+   *
+   * SAFETY: path traversal is blocked by resolving against UI_DIST_DIR and
+   * verifying the resolved path is still inside it.
+   */
+  private serveStatic(
+    _req: http.IncomingMessage,
+    res: http.ServerResponse,
+    pathname: string,
+  ): void {
+    // Resolve dist directory — 404 if not built yet
+    if (!fs.existsSync(UI_DIST_DIR)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Canvas UI not built. Run: cd src/apex/canvas/ui && npm install && npm run build');
+      return;
+    }
+
+    // Strip the /canvas prefix to get the relative path within dist/
+    const relative = pathname === '/canvas' || pathname === '/canvas/'
+      ? 'index.html'
+      : pathname.slice('/canvas/'.length) || 'index.html';
+
+    // SAFETY GATE: resolve to absolute path and verify it stays inside UI_DIST_DIR
+    const resolved = path.resolve(UI_DIST_DIR, relative);
+    if (!resolved.startsWith(UI_DIST_DIR + path.sep) && resolved !== UI_DIST_DIR) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Forbidden');
+      return;
+    }
+
+    // If the file does not exist, fall back to index.html (SPA routing)
+    let filePath = resolved;
+    if (!fs.existsSync(filePath)) {
+      filePath = path.join(UI_DIST_DIR, 'index.html');
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeType = MIME_TYPES[ext] ?? 'application/octet-stream';
+    const isHtml = ext === '.html';
+
+    try {
+      let content = fs.readFileSync(filePath);
+
+      if (isHtml) {
+        // Inject session token as a global JS variable so the frontend can use it
+        // for the WebSocket connection. SAFETY: token never stored in localStorage.
+        const tokenScript = `<script>window.__APEX_TOKEN__ = ${JSON.stringify(this.deps.sessionToken)};</script>`;
+        const html = content.toString('utf-8').replace(
+          '<!-- __APEX_SESSION_TOKEN_SCRIPT__ -->',
+          tokenScript,
+        );
+        content = Buffer.from(html, 'utf-8');
+      }
+
+      res.writeHead(200, {
+        'Content-Type': mimeType,
+        'Content-Length': content.length,
+        // Security headers
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'SAMEORIGIN',
+      });
+      res.end(content);
+    } catch (err) {
+      this.deps.auditLog.write({
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        service: 'CanvasServer',
+        message: `Static file error: ${(err as Error).message}`,
+        action: 'canvas.static.error',
+      });
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Internal server error');
+    }
+  }
 
   /**
    * Build and send the initial system.status snapshot event to a newly
