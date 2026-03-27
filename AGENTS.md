@@ -391,3 +391,29 @@ can consume. Do not build the UI.
 - `src/apex/repl/Repl.ts` (updated — goal command dispatch + handleGoal)
 - `src/apex/types/index.ts` (updated — GoalStep + GoalStepTool types)
 - `tests/agent/GoalLoop.test.ts` (new — 15 tests)
+
+## [JAL-012] — 2026-03-27
+### Pattern Discovered
+- Tool catalog lives at `src/apex/tools/`. Each tool file exports one or more classes implementing `ITool: { name, description, tier, execute(args) }`.
+- `ToolRegistry` at `src/apex/tools/ToolRegistry.ts` registers all tools and exposes `catalog()` for LLM prompt injection. GoalLoop accepts `toolRegistry` option and injects catalog into the decompose prompt.
+- Tools classify via `firewall.classify('shell.exec', { command })` BEFORE executing via `bypassShell`. The firewall's existing TIER2_SHELL_RULES already covers `kill` → Tier 2. Tools never spawn processes directly.
+- `system:env` reads `process.env` directly (no shell) and redacts values where the key matches `/token|key|password|secret|api|auth|credential|private/i`.
+- `network:curl` uses `--get` flag to enforce HTTP GET. URL validated against `/^https?:\/\//i` before any firewall call.
+- `WorkspaceRootsConfig.add()` is the method to add workspace roots (not `addRoot()`).
+### Gotcha
+- `AutoApproveTier2Firewall` test double must cast as `unknown` first, then cast to `TieredFirewall` to satisfy TypeScript — `DenyFirewall` likewise. These stubs don't extend TieredFirewall.
+- `file:diff` exits 1 when files differ (POSIX spec) — this is NOT an error condition. Callers should inspect stdout, not just exit_code.
+- `log:log-grep` exits 1 when grep finds no matches — also not an error. Same pattern as diff.
+- `process:top-n` uses `ps aux --sort=-%cpu | head -n ${n+1}` — the +1 preserves the header row.
+- ShellEngine's injection check (`/[;`\r\n]|\$\(|\$\{/`) runs on the full command string. All tool args are wrapped in `sq()` (single-quote escape) before embedding in commands.
+### Files Modified
+- `src/apex/tools/ToolRegistry.ts` (new)
+- `src/apex/tools/FileTools.ts` (new)
+- `src/apex/tools/ProcessTools.ts` (new)
+- `src/apex/tools/NetworkTools.ts` (new)
+- `src/apex/tools/LogTools.ts` (new)
+- `src/apex/tools/SystemTools.ts` (new)
+- `src/apex/agent/GoalLoop.ts` (updated — toolRegistry option + catalog in prompt)
+- `src/apex/runtime/ApexRuntime.ts` (updated — toolRegistry field + all 18 tools registered)
+- `src/apex/types/index.ts` (updated — ToolResult + ITool types)
+- `tests/tools/ToolRegistry.test.ts` (new — 45 tests)

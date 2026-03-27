@@ -31,6 +31,7 @@ import {
   MemoryItem,
 } from '../types';
 import type { ApexRuntime } from '../runtime/ApexRuntime';
+import type { ToolRegistry } from '../tools/ToolRegistry';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,8 @@ export interface GoalLoopOptions {
   workspaceId?: string;
   /** Override state dir for EpisodicStore (for testing). */
   stateDir?: string;
+  /** Tool registry — catalog injected into the LLM decompose prompt. */
+  toolRegistry?: ToolRegistry;
 }
 
 // Partial step shape returned by the LLM decomposition prompt.
@@ -59,6 +62,7 @@ export class GoalLoop {
   private readonly episodicStore: EpisodicStore;
   private readonly workspaceId: string;
   private readonly emit: (text: string) => void;
+  private readonly toolRegistry: ToolRegistry | undefined;
 
   constructor(
     private readonly runtime: ApexRuntime,
@@ -69,6 +73,7 @@ export class GoalLoop {
     this.episodicStore = new EpisodicStore(options.stateDir);
     this.workspaceId = options.workspaceId ?? 'apex_goal_loop';
     this.emit = options.onChunk ?? ((text) => process.stdout.write(text));
+    this.toolRegistry = options.toolRegistry;
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -328,6 +333,15 @@ export class GoalLoop {
       ? `Current system state:\n${this.runtime.heartbeatNarrative}`
       : 'No recent system state available.';
 
+    const catalog = this.toolRegistry
+      ? this.toolRegistry.catalog()
+      : [
+          'Available tools:',
+          '  - shell: Execute bash shell commands',
+          '  - docker: Manage Docker containers (list, start, stop, inspect)',
+          '  - fileops: Read/write files within workspace roots',
+        ].join('\n');
+
     return [
       '## Identity',
       soul,
@@ -339,9 +353,7 @@ export class GoalLoop {
       narrative,
       '',
       '## Available Tools',
-      '- shell: Execute bash shell commands',
-      '- docker: Manage Docker containers (list, start, stop, inspect)',
-      '- fileops: Read/write files within workspace roots',
+      catalog,
       '',
       '## Instructions',
       `Decompose the following goal into a concrete ordered list of shell steps.`,

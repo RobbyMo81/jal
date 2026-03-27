@@ -444,6 +444,40 @@ export interface ToolOutputChunk {
   was_chunked: boolean;
 }
 
+// ── Tool Catalog (JAL-012) ────────────────────────────────────────────────────
+
+/**
+ * Structured result returned by every tool execution.
+ * Compatible with GoalLoop step output.
+ */
+export interface ToolResult {
+  /** Tool name (e.g. "file:read", "process:kill"). */
+  tool: string;
+  /** Arguments passed to the tool. */
+  args: string[];
+  /** Tier that was enforced for this invocation. */
+  tier: PolicyTier;
+  /** Exit code: 0 = success, non-zero = failure. */
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+}
+
+/**
+ * Contract every tool in the catalog must implement.
+ * Tools delegate execution to ShellEngine or PolicyFileOps — never spawn directly.
+ */
+export interface ITool {
+  /** Short dot-namespaced name used as tool identifier (e.g. "file:read"). */
+  readonly name: string;
+  /** One-line description injected into the GoalLoop LLM prompt. */
+  readonly description: string;
+  /** Default tier for catalog display (actual tier enforced at classify() time). */
+  readonly tier: PolicyTier;
+  execute(args: string[]): Promise<ToolResult>;
+}
+
 // ── Goal Loop (JAL-011) ───────────────────────────────────────────────────────
 
 export type GoalStepTool = 'shell' | 'docker' | 'fileops';

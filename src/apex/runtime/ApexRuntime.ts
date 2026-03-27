@@ -31,6 +31,12 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { EpisodicStore } from '../memory/EpisodicStore';
 import { DurableStore } from '../memory/DurableStore';
 import { ApprovalToken } from '../types';
+import { ToolRegistry } from '../tools/ToolRegistry';
+import { ReadFileTool, WriteFileTool, ListDirTool, SearchFilesTool, DiffFilesTool } from '../tools/FileTools';
+import { PsTool, KillTool, TopNTool } from '../tools/ProcessTools';
+import { PingTool, PortCheckTool, CurlTool } from '../tools/NetworkTools';
+import { TailTool, LogGrepTool } from '../tools/LogTools';
+import { EnvTool, UptimeTool, DfTool, FreeTool, WhichTool } from '../tools/SystemTools';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -84,6 +90,8 @@ export class ApexRuntime {
   readonly memoryManager: MemoryManager;
   /** Provider-agnostic LLM gateway for GoalLoop (JAL-011). */
   readonly providerGateway: ProviderGateway;
+  /** Tool catalog for GoalLoop context injection and direct tool dispatch (JAL-012). */
+  readonly toolRegistry: ToolRegistry;
 
   private readonly apexHome: string;
   private readonly identityDocsDir: string;
@@ -169,6 +177,39 @@ export class ApexRuntime {
       );
       this.isStubGateway = true;
     }
+
+    // Tool registry — bypass ShellEngine (no firewall) + firewall for pre-classification
+    const bypassShell = new ShellEngine(); // no firewall — tools classify themselves
+    const toolCtx = {
+      bypassShell,
+      fileOps: this.fileOps,
+      auditLog: this.auditLog,
+      firewall: this.firewall,
+    };
+    this.toolRegistry = new ToolRegistry();
+    // File tools
+    this.toolRegistry.register(new ReadFileTool(toolCtx));
+    this.toolRegistry.register(new WriteFileTool(toolCtx));
+    this.toolRegistry.register(new ListDirTool(toolCtx));
+    this.toolRegistry.register(new SearchFilesTool(toolCtx));
+    this.toolRegistry.register(new DiffFilesTool(toolCtx));
+    // Process tools
+    this.toolRegistry.register(new PsTool(toolCtx));
+    this.toolRegistry.register(new KillTool(toolCtx));
+    this.toolRegistry.register(new TopNTool(toolCtx));
+    // Network tools
+    this.toolRegistry.register(new PingTool(toolCtx));
+    this.toolRegistry.register(new PortCheckTool(toolCtx));
+    this.toolRegistry.register(new CurlTool(toolCtx));
+    // Log tools
+    this.toolRegistry.register(new TailTool(toolCtx));
+    this.toolRegistry.register(new LogGrepTool(toolCtx));
+    // System tools
+    this.toolRegistry.register(new EnvTool(toolCtx));
+    this.toolRegistry.register(new UptimeTool(toolCtx));
+    this.toolRegistry.register(new DfTool(toolCtx));
+    this.toolRegistry.register(new FreeTool(toolCtx));
+    this.toolRegistry.register(new WhichTool(toolCtx));
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
