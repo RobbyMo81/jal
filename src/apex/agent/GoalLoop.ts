@@ -1,5 +1,6 @@
 // Co-authored by FORGE (Session: forge-20260327063704-3049883)
 // src/apex/agent/GoalLoop.ts — JAL-011 Natural Language Goal Loop
+//                              JAL-015 Reasoning & Context Optimization
 //
 // Implements the plan-execute-observe agent loop:
 //  1. Decomposes a natural-language goal into ordered GoalSteps via LLM.
@@ -13,6 +14,12 @@
 //  6. Writes execution trace to EpisodicStore.
 //  7. Prints a plain-English summary on completion.
 //
+// JAL-015 additions:
+//  - RelevanceScorer selects top-K episodic memories for each goal context.
+//  - ContextPacker enforces budget allocation before every LLM call.
+//  - Summarizer condenses task histories > 2000 tokens before re-inclusion.
+//  - Per-step token tracking with 80% context-limit warning.
+//
 // Safety gates:
 //  - Every step classified through TieredFirewall before execution — no bypass.
 //  - Tier 3 always aborts — never prompts.
@@ -22,6 +29,10 @@ import * as crypto from 'crypto';
 import { ShellEngine } from '../shell/ShellEngine';
 import { ProviderGateway } from '../auth/ProviderGateway';
 import { EpisodicStore } from '../memory/EpisodicStore';
+import { RelevanceScorer } from '../memory/RelevanceScorer';
+import { ContextPacker } from '../memory/ContextPacker';
+import { ContextBudget, approxTokens } from '../memory/ContextBudget';
+import { Summarizer, SUMMARY_TOKEN_THRESHOLD } from './Summarizer';
 import {
   GoalStep,
   GoalStepTool,
@@ -32,6 +43,14 @@ import {
 } from '../types';
 import type { ApexRuntime } from '../runtime/ApexRuntime';
 import type { ToolRegistry } from '../tools/ToolRegistry';
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/** Default model context window (tokens) — large model, 200K. */
+const DEFAULT_CONTEXT_WINDOW = 200_000;
+
+/** Warn when estimated context tokens exceed this fraction of the window. */
+const CONTEXT_WARN_THRESHOLD = 0.8;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -44,6 +63,18 @@ export interface GoalLoopOptions {
   stateDir?: string;
   /** Tool registry — catalog injected into the LLM decompose prompt. */
   toolRegistry?: ToolRegistry;
+  /**
+   * Model context window in tokens (JAL-015).
+   * Used for budget allocation and 80% token-limit warnings.
+   * Defaults to DEFAULT_CONTEXT_WINDOW (200K).
+   */
+  contextWindow?: number;
+  /**
+   * Debug logger for context optimization decisions (JAL-015).
+   * Called with segment sizes, truncation actions, and token warnings.
+   * Defaults to no-op.
+   */
+  debugLog?: (msg: string) => void;
 }
 
 // Partial step shape returned by the LLM decomposition prompt.
@@ -64,6 +95,13 @@ export class GoalLoop {
   private readonly emit: (text: string) => void;
   private readonly toolRegistry: ToolRegistry | undefined;
 
+  // ── JAL-015 context optimization components ─────────────────────────────────
+  private readonly relevanceScorer: RelevanceScorer;
+  private readonly contextPacker: ContextPacker;
+  private readonly summarizer: Summarizer;
+  private readonly contextWindow: number;
+  private readonly debugLog: (msg: string) => void;
+
   constructor(
     private readonly runtime: ApexRuntime,
     private readonly gateway: ProviderGateway,
@@ -74,6 +112,13 @@ export class GoalLoop {
     this.workspaceId = options.workspaceId ?? 'apex_goal_loop';
     this.emit = options.onChunk ?? ((text) => process.stdout.write(text));
     this.toolRegistry = options.toolRegistry;
+
+    // JAL-015 components
+    this.relevanceScorer = new RelevanceScorer();
+    this.contextPacker = new ContextPacker(new ContextBudget(options.stateDir));
+    this.summarizer = new Summarizer(gateway);
+    this.contextWindow = options.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+    this.debugLog = options.debugLog ?? ((_msg: string) => { /* no-op */ });
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -114,6 +159,9 @@ export class GoalLoop {
 
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]!;
+
+      // ── JAL-015: Per-step token tracking + 80% warning ─────────────────────
+      this.checkContextTokenWarning(i + 1, goal, priorOutputs);
 
       this.emit(`── Step ${i + 1}/${steps.length}: ${step.description}\n`);
       this.emit(`   Command: ${step.command}\n`);
@@ -194,15 +242,16 @@ export class GoalLoop {
           step.error = lastError;
         }
 
-        // Self-correct before next attempt
+        // Self-correct before next attempt — JAL-015: summarize history if needed
         if (attempt < 2 && !succeeded) {
           this.emit(`   [APEX] Step failed (attempt ${attempt + 1}/3): exit error\n`);
           try {
+            const historyText = await this.buildHistoryForCorrection(goal, priorOutputs);
             const corrected = await this.selfCorrect(
               goal,
               step,
               lastError,
-              priorOutputs
+              historyText
             );
             if (corrected && corrected.trim() !== step.command.trim()) {
               step.command = corrected.trim();
@@ -248,10 +297,11 @@ export class GoalLoop {
 
   /**
    * Ask the LLM to decompose the goal into ordered GoalSteps.
+   * JAL-015: retrieves top-K episodic memories, packs context via ContextPacker.
    * Returns parsed steps or throws on LLM/parse failure.
    */
   private async decomposeGoal(goal: string): Promise<GoalStep[]> {
-    const prompt = this.buildDecomposePrompt(goal);
+    const prompt = await this.buildDecomposePrompt(goal);
 
     let raw: string;
     try {
@@ -270,17 +320,18 @@ export class GoalLoop {
   /**
    * Ask the LLM for a corrected command given a failed step and its error.
    * Returns the corrected command string, or the original command on failure.
+   *
+   * JAL-015: accepts pre-built historyText (already summarized if needed).
    */
   private async selfCorrect(
     goal: string,
     step: GoalStep,
     error: string,
-    priorOutputs: string[]
+    historyText: string
   ): Promise<string> {
-    const priorContext =
-      priorOutputs.length > 0
-        ? `Prior step outputs:\n${priorOutputs.slice(-3).join('\n\n')}\n\n`
-        : '';
+    const priorContext = historyText.length > 0
+      ? `Prior step outputs:\n${historyText}\n\n`
+      : '';
 
     const prompt =
       `You are correcting a failed shell command. Return ONLY the corrected command string — ` +
@@ -320,13 +371,72 @@ export class GoalLoop {
     return result.content.trim();
   }
 
+  // ── JAL-015: Context optimization helpers ──────────────────────────────────
+
+  /**
+   * Build prior-step history for self-correction.
+   * If the accumulated history exceeds SUMMARY_TOKEN_THRESHOLD, summarize it first.
+   * Raw history is NOT discarded — it lives in priorOutputs and gets written to
+   * episodic memory via the execution trace.
+   */
+  private async buildHistoryForCorrection(
+    goal: string,
+    priorOutputs: string[]
+  ): Promise<string> {
+    const raw = priorOutputs.slice(-3).join('\n\n');
+    if (!this.summarizer.shouldSummarize(raw)) {
+      return raw;
+    }
+
+    this.debugLog(
+      `[GoalLoop] task history ${approxTokens(raw)} tokens > ${SUMMARY_TOKEN_THRESHOLD} — summarizing`
+    );
+    const summary = await this.summarizer.summarize(goal, raw);
+    this.debugLog(`[GoalLoop] summarized to ~${approxTokens(summary)} tokens`);
+    return summary;
+  }
+
+  /**
+   * Estimate approximate context tokens for the current step and emit a warning
+   * if they exceed 80% of the model's context window.
+   */
+  private checkContextTokenWarning(
+    stepIndex: number,
+    goal: string,
+    priorOutputs: string[]
+  ): void {
+    const estimatedTokens =
+      approxTokens(goal) +
+      priorOutputs.reduce((s, t) => s + approxTokens(t), 0);
+
+    const threshold = Math.floor(this.contextWindow * CONTEXT_WARN_THRESHOLD);
+
+    if (estimatedTokens > threshold) {
+      const pct = Math.round((estimatedTokens / this.contextWindow) * 100);
+      const msg =
+        `[GoalLoop] WARNING: step ${stepIndex} context ~${estimatedTokens}tok ` +
+        `(${pct}% of ${this.contextWindow} limit)`;
+      this.debugLog(msg);
+      this.emit(`[APEX] Warning: context approaching limit (${pct}% of ${this.contextWindow} tokens)\n`);
+    } else {
+      this.debugLog(
+        `[GoalLoop] step ${stepIndex} context ~${estimatedTokens}tok ` +
+        `(${Math.round((estimatedTokens / this.contextWindow) * 100)}% of limit)`
+      );
+    }
+  }
+
   // ── Prompt builders ────────────────────────────────────────────────────────
 
   /**
    * Build the goal decomposition system prompt.
+   *
+   * JAL-015: retrieves top-K episodic memories via RelevanceScorer and packs
+   * all segments through ContextPacker before assembling the final string.
+   *
    * SAFETY: Never includes credentials, tokens, or raw command output.
    */
-  private buildDecomposePrompt(goal: string): string {
+  private async buildDecomposePrompt(goal: string): Promise<string> {
     const soul = this.runtime.identityDocs.soul ?? '(not loaded)';
     const behavior = this.runtime.identityDocs.behavior ?? '(not loaded)';
     const narrative = this.runtime.heartbeatNarrative
@@ -342,28 +452,65 @@ export class GoalLoop {
           '  - fileops: Read/write files within workspace roots',
         ].join('\n');
 
-    return [
+    // JAL-015: retrieve top-K relevant episodic memories (sensitive items excluded)
+    const allMemories = this.episodicStore.list(this.workspaceId);
+    const topK = this.relevanceScorer.selectTopK(goal, allMemories);
+    const retrievedMemoryItems = topK.map(
+      m =>
+        `[Memory ${new Date(m.last_accessed_at).toLocaleDateString()}] ` +
+        m.content.slice(0, 300)
+    );
+
+    // JAL-015: pack all segments through ContextPacker
+    const packed = this.contextPacker.pack({
+      contextWindow: this.contextWindow,
+      systemPolicy: [soul, behavior],
+      activeTask: [
+        'Decompose the following goal into a concrete ordered list of shell steps.',
+        'Return ONLY a valid JSON array. Each element must have exactly these fields:',
+        '  { "id": "step-N", "description": "...", "command": "...", "tool": "shell" }',
+        'Use only simple commands (no semicolons, pipes are OK, no sudo).',
+        'Return no text outside the JSON array.',
+        `Goal: ${goal}`,
+      ],
+      recentActions: narrative ? [narrative] : [],
+      retrievedMemory: retrievedMemoryItems,
+      logger: this.debugLog,
+    });
+
+    // JAL-015: warn if decompose prompt is large relative to context window
+    if (packed.total_tokens > Math.floor(this.contextWindow * CONTEXT_WARN_THRESHOLD)) {
+      const pct = Math.round((packed.total_tokens / this.contextWindow) * 100);
+      this.debugLog(
+        `[GoalLoop] WARNING: decompose prompt ~${packed.total_tokens}tok ` +
+        `(${pct}% of ${this.contextWindow} limit)`
+      );
+    }
+
+    // Assemble prompt from packed segments
+    const sections: string[] = [
       '## Identity',
-      soul,
-      '',
-      '## Operational Rules',
-      behavior,
+      packed.segments.system_policy.join('\n\n'),
       '',
       '## System Context',
-      narrative,
+      packed.segments.recent_actions.join('\n') || 'No recent system state available.',
       '',
       '## Available Tools',
       catalog,
+    ];
+
+    if (packed.segments.retrieved_memory.length > 0) {
+      sections.push('', '## Relevant Context From Memory');
+      sections.push(packed.segments.retrieved_memory.join('\n'));
+    }
+
+    sections.push(
       '',
       '## Instructions',
-      `Decompose the following goal into a concrete ordered list of shell steps.`,
-      `Return ONLY a valid JSON array. Each element must have exactly these fields:`,
-      `  { "id": "step-N", "description": "...", "command": "...", "tool": "shell" }`,
-      `Use only simple commands (no semicolons, pipes are OK, no sudo).`,
-      `Return no text outside the JSON array.`,
-      '',
-      `Goal: ${goal}`,
-    ].join('\n');
+      packed.segments.active_task_state.join('\n')
+    );
+
+    return sections.join('\n');
   }
 
   // ── Parsing ────────────────────────────────────────────────────────────────

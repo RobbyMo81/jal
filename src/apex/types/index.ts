@@ -344,6 +344,11 @@ export interface MemoryItem {
   access_count: number;
   /** UTF-8 byte length of content. */
   size_bytes: number;
+  /**
+   * If true, this item must never be included in LLM prompts or relevance-scored
+   * results. The RelevanceScorer filters these out unconditionally.
+   */
+  sensitive?: boolean;
 }
 
 export interface MemoryFeedbackRecord {
