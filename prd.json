@@ -265,7 +265,7 @@
       "id": "JAL-012",
       "title": "Expanded Tool Catalog",
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "description": "Extend Apex's built-in tool set beyond shell and Docker so the goal loop has richer primitives to work with. All tools flow through TieredFirewall and produce structured results the LLM can reason about.",
       "acceptanceCriteria": [
         "File tools: read <path>, write <path> <content>, list <dir>, search <pattern> <dir> (grep), diff <path1> <path2>. All subject to PolicyFileOps tier classification.",

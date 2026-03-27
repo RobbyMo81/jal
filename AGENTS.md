@@ -417,3 +417,15 @@ can consume. Do not build the UI.
 - `src/apex/runtime/ApexRuntime.ts` (updated — toolRegistry field + all 18 tools registered)
 - `src/apex/types/index.ts` (updated — ToolResult + ITool types)
 - `tests/tools/ToolRegistry.test.ts` (new — 45 tests)
+
+## Auto-compiled from FORGE Discoveries — 2026-03-27
+
+### PATTERNS
+- **[JAL-012] Tools pre-classify via firewall then execute via bypassShell**: firewall.classify(shell.exec, {command}) before every bypassShell.exec(). Existing TIER2_SHELL_RULES covers kill -> Tier 2 automatically.
+- **[JAL-012] ToolRegistry.catalog() formats LLM-injectable tool list**: catalog() = Available tools:
+  - <name>: <description> [Tier N]. GoalLoop injects via toolRegistry option.
+
+### GOTCHAS
+- **[JAL-012] file:diff and log:log-grep exit_code=1 on no-match is NOT an error**: POSIX diff exits 1 when files differ; grep exits 1 when no matches. Callers should inspect stdout, not check exit_code === 0.
+- **[JAL-012] system:env reads process.env directly — no shell subprocess**: EnvTool reads process.env in JS, redacts via SECRET_KEY_RE = /token|key|password|secret|api|auth|credential|private/i, returns sorted lines.
+

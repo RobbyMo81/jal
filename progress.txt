@@ -59,3 +59,9 @@ STATUS: PASS | Session: forge-20260326221916-3025550 | Iteration: 2
 [2026-03-27] Story [JAL-011]: Natural Language Goal Loop
 STATUS: PASS | Session: forge-20260327063704-3049883 | Iteration: 1
 ---
+
+[2026-03-27 13:56:30] JAL-012 (iter 2): PASS — Implemented JAL-012 Expanded Tool Catalog. 18 tools across 5 categories. 45 new tests. 630/630 total. typecheck clean.
+
+[2026-03-27] Story [JAL-012]: Expanded Tool Catalog
+STATUS: PASS | Session: forge-20260327063704-3049883 | Iteration: 2
+---
