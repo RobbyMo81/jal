@@ -84,7 +84,7 @@ init_memory() {
   sidecars_init
 }
 
-declare -A SIDECAR_PIDS
+declare -A SIDECAR_PIDS=()
 
 # ── Sidecar Orchestration (V2.1) ───────────────────────────
 python_venv_init() {
@@ -212,7 +212,7 @@ sidecars_init() {
 }
 
 sidecars_reap() {
-  [[ "${#SIDECAR_PIDS[@]:-0}" -eq 0 ]] && return
+  [[ ${#SIDECAR_PIDS[@]} -eq 0 ]] && return
   
   log "Reaping ${#SIDECAR_PIDS[@]} sidecar(s)..."
   

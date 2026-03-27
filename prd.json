@@ -191,6 +191,30 @@
         "Durable promotion requires explicit user approval — no auto-promotion",
         "system_policy context segment is never truncated"
       ]
+    },
+    {
+      "id": "JAL-009",
+      "title": "Runtime Wiring & Interactive REPL",
+      "priority": 9,
+      "passes": true,
+      "description": "Wire all Phase 1 modules into a unified ApexRuntime and expose an interactive REPL for user testing. The REPL is the Phase 1 user interface — it lets operators exercise shell execution, Docker ops, and policy enforcement interactively before Canvas UX is built in Phase 2.",
+      "acceptanceCriteria": [
+        "ApexRuntime class instantiates and wires all Phase 1 services: ShellEngine, DockerEngine, TieredFirewall, PolicyFileOps, AuthManager, HeartbeatScheduler, CheckpointStore, MemoryManager, AuditLog.",
+        "ApexRuntime exposes start() and stop() lifecycle methods; stop() gracefully shuts down the heartbeat, reaps active shell/Docker processes, and flushes audit logs.",
+        "REPL supports these commands: `run <shell command>` (shell execution), `docker <list|start|stop|inspect> [args]` (Docker ops), `status` (show heartbeat status, active processes, memory stats), `help` (list commands), `exit` (graceful shutdown).",
+        "Tier 1 actions execute immediately and print result with exit code and stdout/stderr.",
+        "Tier 2 actions pause and print an approval prompt: `[TIER 2] <action> — Approve? (y/n):`. On y, execute and print result. On n, print 'Denied.' and return to prompt.",
+        "Tier 3 actions are immediately rejected with `[TIER 3 BLOCKED] <reason>` and return to prompt — no approval prompt shown.",
+        "Output streams incrementally to the REPL as chunks arrive (not buffered until completion).",
+        "Startup sequence: init runtime → check ~/.apex/ directories exist (create if missing) → print banner with version, active provider, heartbeat interval → drop into REPL prompt.",
+        "A `npm run apex` script starts the REPL via ts-node.",
+        "All REPL interactions are audit-logged with tier, action, and outcome."
+      ],
+      "technicalNotes": "ApexRuntime lives at src/apex/runtime/ApexRuntime.ts. REPL lives at src/apex/repl/Repl.ts using Node.js readline. Wire TieredFirewall.onApprovalRequired callback to the REPL's stdin prompt for Tier 2 approvals. ShellEngine and DockerEngine already accept IPolicyFirewall — pass the TieredFirewall instance. Entry point: src/apex/main.ts, run via ts-node.",
+      "safetyGates": [
+        "Tier 3 actions never prompt for approval — immediate block only",
+        "All REPL commands audit-logged before execution"
+      ]
     }
   ]
 }
