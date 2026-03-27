@@ -334,3 +334,20 @@ can consume. Do not build the UI.
 ### GOTCHAS
 - **[JAL-008] MemoryManager.promoteToDurable() is the single auto-promotion safety gate**: Throws immediately if userApproved !== true. No bypass path exists.
 
+
+## JAL-009 — 2026-03-26
+### Pattern Discovered
+- `ApexRuntime` is the single wiring point for all Phase 1 services. Instantiate it once and pass it to the REPL or any other consumer. All services are public readonly properties.
+- `Repl` constructor accepts `runtimeOptions.onApprovalRequired` to override the readline-based Tier 2 prompt — use this for test doubles instead of mocking readline.
+- `onApprovalRequired` is wired to BOTH `TieredFirewall` and `PolicyFileOps` via the same callback — changing the approval UX requires updating only one place in `ApexRuntime`.
+### Gotcha
+- If `runtimeOptions.onApprovalRequired` is provided to Repl, it replaces the readline prompt entirely. Tests MUST call `approvalService.resolve(token.id, bool)` explicitly from within the callback, or `classify()` will hang and the test will time out.
+- `ts-node` must be installed as a devDependency for `npm run apex` to work. It was absent from the initial package.json — added in JAL-009.
+- `readline.Interface` in the Repl must be created BEFORE the runtime, because `handleTier2Approval` captures `this.rl`. The approval callback is then safely passed to `ApexRuntime` after `this.rl` exists.
+### Files Modified
+- `src/apex/runtime/ApexRuntime.ts` (new)
+- `src/apex/repl/Repl.ts` (new)
+- `src/apex/main.ts` (new)
+- `package.json` (added ts-node devDependency)
+- `tests/runtime/ApexRuntime.test.ts` (new)
+- `tests/repl/Repl.test.ts` (new)
