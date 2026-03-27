@@ -439,3 +439,28 @@ can consume. Do not build the UI.
 ### GOTCHAS
 - **[JAL-013] CanvasEvent cast to Record<string,unknown> requires unknown intermediary**: CanvasEvent has no index signature. Direct cast to Record<string,unknown> is TS2352. Use (e as unknown as Record<string,unknown>) instead.
 
+
+## JAL-014 — 2026-03-27
+### Pattern Discovered
+- **Canvas UI is a separate Vite project**: `src/apex/canvas/ui/` has its own `package.json`, `tsconfig.json`, `vite.config.ts`. Exclude it from the root `tsconfig.json` via `"exclude": ["src/apex/canvas/ui/**"]` — otherwise the root typecheck fails trying to resolve react/vite imports.
+- **Session token injection via HTML placeholder**: CanvasServer replaces `<!-- __APEX_SESSION_TOKEN_SCRIPT__ -->` in `index.html` with `<script>window.__APEX_TOKEN__ = "TOKEN";</script>` before serving. Frontend reads `window.__APEX_TOKEN__` — never localStorage.
+- **Static file path traversal safety**: `path.resolve(UI_DIST_DIR, relative)` followed by `startsWith(UI_DIST_DIR + path.sep)` check. Exploits using `..` segments are caught here.
+- **SPA fallback**: Unknown paths under `/canvas/*` fall back to `index.html` (not 404), enabling client-side routing.
+### Gotcha
+- **UI_DIST_DIR in tests**: ts-jest resolves `__dirname` as the source directory, not compiled dist. `path.resolve(__dirname, 'ui', 'dist')` in `CanvasServer.ts` resolves to `src/apex/canvas/ui/dist`. Tests that need a real dist create/cleanup this directory in `ensureDist()`/`cleanupDist()` helpers.
+- **vite.config.ts must set `base: '/canvas/'`**: Vite emits asset URLs relative to base. Without this, asset URLs in the built HTML point to `/assets/...` instead of `/canvas/assets/...`, causing 404s when served under the `/canvas/` prefix.
+### Files Modified
+- `src/apex/canvas/ui/` (new — full Vite + React project)
+- `src/apex/canvas/CanvasServer.ts` (updated — /canvas static file serving + token injection)
+- `tests/canvas/CanvasServer.test.ts` (updated — +9 static file serving tests)
+- `tsconfig.json` (updated — exclude canvas UI directory)
+
+## Auto-compiled from FORGE Discoveries — 2026-03-27
+
+### PATTERNS
+- **[JAL-014] Canvas UI must be excluded from root tsconfig**: tsconfig.json exclude: [src/apex/canvas/ui/**] required or root typecheck fails on react/vite imports.
+- **[JAL-014] Session token injected via HTML placeholder — never localStorage**: CanvasServer replaces <!-- __APEX_SESSION_TOKEN_SCRIPT__ --> in served index.html with window.__APEX_TOKEN__. Frontend reads window.__APEX_TOKEN__ for WS query param — never localStorage.
+
+### GOTCHAS
+- **[JAL-014] vite.config.ts must set base: /canvas/**: Without base: /canvas/ in vite.config.ts, Vite emits /assets/... URLs which 404 when served under /canvas/ prefix.
+

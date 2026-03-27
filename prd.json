@@ -310,7 +310,7 @@
       "id": "JAL-014",
       "title": "Canvas Frontend",
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "description": "Build the real-time operational dashboard that connects to the Canvas backend. Shows live system state, terminal output, heartbeat status, approval surfaces, and memory panel. Built with React + Vite, served by the Canvas backend.",
       "acceptanceCriteria": [
         "React + Vite app served as static files by CanvasServer at GET /canvas. Opens in browser at http://localhost:7474/canvas.",
