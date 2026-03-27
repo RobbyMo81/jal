@@ -220,7 +220,7 @@
       "id": "JAL-010",
       "title": "Heartbeat-driven Context Awareness",
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "description": "Extend the heartbeat from a health monitor into a continuous context accumulator. Every pulse snapshots the environment, computes deltas, classifies changes, and writes observations into episodic memory. Sessions open with ambient awareness of what happened while Apex was not in conversation. Soul.md and Behavior.md are loaded at every session start as the agent's identity and operational ground truth.",
       "acceptanceCriteria": [
         "Each heartbeat pulse produces an EnvironmentSnapshot: running processes, container states, disk usage per mount, available memory, and active network connections.",
