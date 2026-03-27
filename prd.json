@@ -242,7 +242,7 @@
       "id": "JAL-011",
       "title": "Natural Language Goal Loop",
       "priority": 11,
-      "passes": false,
+      "passes": true,
       "description": "Wire ProviderGateway into a plan-execute-observe agent loop. Kirk states a goal in natural language. Apex decomposes it into steps, classifies each through TieredFirewall, executes with streaming output, self-corrects on failure, and reports completion. This is the core of what makes Apex an agent rather than a shell wrapper.",
       "acceptanceCriteria": [
         "REPL accepts `goal <natural language>` command and routes it through the goal loop.",
