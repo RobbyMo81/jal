@@ -332,7 +332,7 @@
       "id": "JAL-015",
       "title": "Reasoning & Context Optimization",
       "priority": 15,
-      "passes": false,
+      "passes": true,
       "description": "Make Apex smarter about what context it includes in LLM calls. Relevance-score episodic memory retrieval, optimize context packing against the budget model, and summarize long task histories so goal loops stay coherent across complex multi-step operations.",
       "acceptanceCriteria": [
         "Episodic memory retrieval ranks entries by relevance to the current goal using keyword overlap and recency score (recency weight 0.4, keyword overlap weight 0.6). Top-K entries (default K=10) are included in goal loop context.",
