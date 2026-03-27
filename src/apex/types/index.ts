@@ -478,6 +478,39 @@ export interface ITool {
   execute(args: string[]): Promise<ToolResult>;
 }
 
+// ── Canvas Events (JAL-013) ───────────────────────────────────────────────────
+
+/**
+ * Event types streamed over the Canvas WebSocket connection.
+ * Matches PRD §14.2 outbound event type enumeration.
+ */
+export type CanvasEventType =
+  | 'system.status'
+  | 'command.output'
+  | 'approval.requested'
+  | 'approval.resolved'
+  | 'heartbeat.pulse'
+  | 'task.started'
+  | 'task.completed'
+  | 'task.failed';
+
+/**
+ * Outbound envelope for all Canvas WebSocket events (PRD §14.2).
+ * Every event published by ApexRuntime → EventBus → CanvasServer uses this shape.
+ */
+export interface CanvasEvent {
+  /** UUID for this event instance. */
+  event_id: string;
+  event_type: CanvasEventType;
+  /** Associated task ID, or null for system-level events. */
+  task_id: string | null;
+  /** Policy tier relevant to this event, or null. */
+  tier: PolicyTier | null;
+  created_at: string;
+  /** Event-specific data. Must never contain credentials, tokens, or raw secrets. */
+  payload: Record<string, unknown>;
+}
+
 // ── Goal Loop (JAL-011) ───────────────────────────────────────────────────────
 
 export type GoalStepTool = 'shell' | 'docker' | 'fileops';

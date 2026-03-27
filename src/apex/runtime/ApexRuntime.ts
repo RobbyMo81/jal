@@ -13,6 +13,7 @@
 import { mkdirSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { randomBytes } from 'crypto';
 import { ShellEngine } from '../shell/ShellEngine';
 import { DockerEngine } from '../docker/DockerEngine';
 import { TieredFirewall } from '../policy/TieredFirewall';
@@ -32,6 +33,10 @@ import { EpisodicStore } from '../memory/EpisodicStore';
 import { DurableStore } from '../memory/DurableStore';
 import { ApprovalToken } from '../types';
 import { ToolRegistry } from '../tools/ToolRegistry';
+import { EventBus } from '../canvas/EventBus';
+import { CanvasServer, CanvasServerOptions, makeCanvasEvent } from '../canvas/CanvasServer';
+import { SnapshotCollector } from '../heartbeat/EnvironmentSnapshot';
+import { ExecSyncShell } from '../heartbeat/HealthChecks';
 import { ReadFileTool, WriteFileTool, ListDirTool, SearchFilesTool, DiffFilesTool } from '../tools/FileTools';
 import { PsTool, KillTool, TopNTool } from '../tools/ProcessTools';
 import { PingTool, PortCheckTool, CurlTool } from '../tools/NetworkTools';
@@ -69,6 +74,11 @@ export interface ApexRuntimeOptions {
    * and a Phase 1 stub token (for dev/test only).
    */
   providerGateway?: ProviderGateway;
+  /**
+   * Canvas server options (JAL-013).
+   * Set to false to disable the Canvas server entirely (e.g. in tests).
+   */
+  canvas?: CanvasServerOptions | false;
 }
 
 // ── ApexRuntime ────────────────────────────────────────────────────────────────
@@ -92,6 +102,16 @@ export class ApexRuntime {
   readonly providerGateway: ProviderGateway;
   /** Tool catalog for GoalLoop context injection and direct tool dispatch (JAL-012). */
   readonly toolRegistry: ToolRegistry;
+  /** Event bus for Canvas events (JAL-013). ApexRuntime publishes; CanvasServer subscribes. */
+  readonly eventBus: EventBus;
+  /**
+   * Session token for Canvas WebSocket auth (JAL-013).
+   * Generated at start() and printed to the REPL banner.
+   * Null before start() is called.
+   */
+  sessionToken: string | null = null;
+  /** Canvas WebSocket + REST server (JAL-013). Null if canvas was disabled in options. */
+  readonly canvasServer: CanvasServer | null;
 
   private readonly apexHome: string;
   private readonly identityDocsDir: string;
@@ -119,17 +139,41 @@ export class ApexRuntime {
     this.apexHome = join(homedir(), '.apex');
     this.identityDocsDir = options.identityDocsDir ?? APEX_SRC_DIR;
 
+    // Canvas event bus — created early so approval callbacks can publish to it (JAL-013)
+    this.eventBus = new EventBus();
+
     // Core audit + approval infrastructure
     this.auditLog = options.auditLog ?? new AuditLog();
     this.approvalService = new ApprovalService();
     this.allowlist = new PackageAllowlist(this.auditLog);
+
+    // Wrap onApprovalRequired so Tier 2 approvals also publish to Canvas EventBus
+    const eventBus = this.eventBus;
+    const onApprovalRequired = options.onApprovalRequired
+      ? (token: ApprovalToken) => {
+          options.onApprovalRequired!(token);
+          eventBus.publish(makeCanvasEvent('approval.requested', {
+            approval_id: token.id,
+            action: token.action,
+            reason: token.reason,
+            expires_at: token.expires_at,
+          }, null, token.tier));
+        }
+      : (token: ApprovalToken) => {
+          eventBus.publish(makeCanvasEvent('approval.requested', {
+            approval_id: token.id,
+            action: token.action,
+            reason: token.reason,
+            expires_at: token.expires_at,
+          }, null, token.tier));
+        };
 
     // Policy firewall — wires onApprovalRequired so REPL can intercept Tier 2
     this.firewall = new TieredFirewall(
       this.approvalService,
       this.auditLog,
       this.allowlist,
-      options.onApprovalRequired
+      onApprovalRequired
     );
 
     // Execution engines — both use the same firewall instance
@@ -142,7 +186,7 @@ export class ApexRuntime {
       workspaceRoots,
       this.approvalService,
       this.auditLog,
-      options.onApprovalRequired
+      onApprovalRequired
     );
 
     // Auth — uses injected or in-memory keychain (Phase 2 will swap in SecretToolKeychain)
@@ -210,6 +254,27 @@ export class ApexRuntime {
     this.toolRegistry.register(new DfTool(toolCtx));
     this.toolRegistry.register(new FreeTool(toolCtx));
     this.toolRegistry.register(new WhichTool(toolCtx));
+
+    // Canvas server — disabled when options.canvas === false (e.g. in unit tests)
+    if (options.canvas === false) {
+      this.canvasServer = null;
+    } else {
+      const snapshotCollector = new SnapshotCollector(new ExecSyncShell());
+      this.canvasServer = new CanvasServer(
+        {
+          sessionToken: '',   // placeholder — real token set in start()
+          eventBus: this.eventBus,
+          approvalService: this.approvalService,
+          checkpointStore: this.checkpointStore,
+          episodicStore,
+          durableStore: this.durableStore,
+          allowlist: this.allowlist,
+          auditLog: this.auditLog,
+          getSnapshot: () => snapshotCollector.collect(),
+        },
+        options.canvas ?? {},
+      );
+    }
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -234,6 +299,13 @@ export class ApexRuntime {
       });
     }
 
+    // Generate session token for Canvas WebSocket authentication (JAL-013)
+    this.sessionToken = randomBytes(32).toString('hex');
+    if (this.canvasServer) {
+      this.canvasServer.setSessionToken(this.sessionToken);
+      await this.canvasServer.start();
+    }
+
     this.heartbeat.start();
     this.auditLog.write({
       timestamp: new Date().toISOString(),
@@ -245,6 +317,7 @@ export class ApexRuntime {
       identity_docs_loaded: Object.entries(this.identityDocs)
         .filter(([, v]) => v !== null)
         .map(([k]) => k),
+      canvas_enabled: this.canvasServer !== null,
     });
   }
 
@@ -264,6 +337,10 @@ export class ApexRuntime {
       this.shellEngine.cancel(execId);
     }
 
+    if (this.canvasServer) {
+      await this.canvasServer.stop();
+    }
+
     this.auditLog.write({
       timestamp: new Date().toISOString(),
       level: 'info',
@@ -275,6 +352,19 @@ export class ApexRuntime {
 
   get heartbeatIntervalSeconds(): number {
     return this.heartbeat.intervalSeconds;
+  }
+
+  /**
+   * Convenience helper to publish a Canvas event to all connected clients (JAL-013).
+   * Payload must never include credentials, tokens, or raw secrets.
+   */
+  publishCanvasEvent(
+    event_type: import('../types').CanvasEventType,
+    payload: Record<string, unknown>,
+    task_id: string | null = null,
+    tier: import('../types').PolicyTier | null = null,
+  ): void {
+    this.eventBus.publish(makeCanvasEvent(event_type, payload, task_id, tier));
   }
 
   // ── Private ───────────────────────────────────────────────────────────────────
