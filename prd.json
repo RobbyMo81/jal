@@ -288,7 +288,7 @@
       "id": "JAL-013",
       "title": "Canvas Backend",
       "priority": 13,
-      "passes": false,
+      "passes": true,
       "description": "Build the real-time event server that Canvas frontend will connect to. Streams system status, command output, heartbeat pulses, and approval requests over WebSocket. Exposes a REST API for task history, memory inspection, and policy management.",
       "acceptanceCriteria": [
         "WebSocket server starts on configurable port (default 7474) when ApexRuntime starts. Clients connect and immediately receive a full system snapshot as the first message.",

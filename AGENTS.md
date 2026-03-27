@@ -429,3 +429,13 @@ can consume. Do not build the UI.
 - **[JAL-012] file:diff and log:log-grep exit_code=1 on no-match is NOT an error**: POSIX diff exits 1 when files differ; grep exits 1 when no matches. Callers should inspect stdout, not check exit_code === 0.
 - **[JAL-012] system:env reads process.env directly — no shell subprocess**: EnvTool reads process.env in JS, redacts via SECRET_KEY_RE = /token|key|password|secret|api|auth|credential|private/i, returns sorted lines.
 
+
+## Auto-compiled from FORGE Discoveries — 2026-03-27
+
+### PATTERNS
+- **[JAL-013] CanvasServer binds 127.0.0.1 by default — port 0 for tests**: Pass port:0, host:127.0.0.1 in CanvasServerOptions to get OS-assigned port. Read httpServer.address().port after start() to find actual port.
+- **[JAL-013] ApexRuntime session token generated in start() not constructor**: CanvasServer constructed with empty sessionToken; setSessionToken() called in start() after randomBytes(32). Call start() before connecting WS clients.
+
+### GOTCHAS
+- **[JAL-013] CanvasEvent cast to Record<string,unknown> requires unknown intermediary**: CanvasEvent has no index signature. Direct cast to Record<string,unknown> is TS2352. Use (e as unknown as Record<string,unknown>) instead.
+
