@@ -215,6 +215,28 @@
         "Tier 3 actions never prompt for approval — immediate block only",
         "All REPL commands audit-logged before execution"
       ]
+    },
+    {
+      "id": "JAL-010",
+      "title": "Heartbeat-driven Context Awareness",
+      "priority": 10,
+      "passes": false,
+      "description": "Extend the heartbeat from a health monitor into a continuous context accumulator. Every pulse snapshots the environment, computes deltas, classifies changes, and writes observations into episodic memory. Sessions open with ambient awareness of what happened while Apex was not in conversation. Soul.md and Behavior.md are loaded at every session start as the agent's identity and operational ground truth.",
+      "acceptanceCriteria": [
+        "Each heartbeat pulse produces an EnvironmentSnapshot: running processes, container states, disk usage per mount, available memory, and active network connections.",
+        "Delta analysis compares current snapshot to the previous one and classifies each change as routine, notable, or urgent per the thresholds defined in Behavior.md.",
+        "Routine changes are written to the audit log only. Notable changes are written to episodic memory with timestamp, delta description, and classification. Urgent changes are posted to the agent message bus immediately.",
+        "After every N pulses (default 12, configurable — approx 1 hour at 5-min interval), accumulated notable deltas are summarized into a human-readable heartbeat narrative and stored as a durable context entry under key 'heartbeat_narrative'.",
+        "ApexRuntime.start() loads Soul.md and Behavior.md from src/apex/ into working memory before the REPL opens. If either file is missing, Apex logs a warning and continues — they are identity documents, not hard dependencies.",
+        "Session start reads the latest heartbeat_narrative from durable context and prints a brief ambient status to the user before the first prompt: what changed, what is urgent, what is healthy.",
+        "Urgent threshold definitions match Behavior.md: mandatory service down, disk >= 85%, available memory < 512 MB, anomalous CPU/memory on any process.",
+        "All snapshot data and delta classifications are written through the existing EpisodicStore and AuditLog — no new persistence layer introduced."
+      ],
+      "technicalNotes": "EnvironmentSnapshot lives at src/apex/heartbeat/EnvironmentSnapshot.ts. Delta analysis at src/apex/heartbeat/DeltaAnalyzer.ts. Narrative summarization calls ProviderGateway (JAL-005) with a compact prompt — if no provider is configured, summarize deterministically from delta counts. Soul.md and Behavior.md are loaded as plain text into ApexRuntime working memory — they are the agent's identity layer, not config files.",
+      "safetyGates": [
+        "Snapshot collection is read-only — no writes to system state",
+        "Narrative summarization never includes credentials, tokens, or raw command output"
+      ]
     }
   ]
 }

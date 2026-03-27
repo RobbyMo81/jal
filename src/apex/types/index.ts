@@ -444,6 +444,72 @@ export interface ToolOutputChunk {
   was_chunked: boolean;
 }
 
+// ── Environment Snapshot (JAL-010) ────────────────────────────────────────────
+
+export interface ProcessInfo {
+  pid: number;
+  /** Process command name. */
+  name: string;
+  /** CPU usage percentage at snapshot time. */
+  cpu_percent: number;
+  /** Memory usage percentage at snapshot time. */
+  mem_percent: number;
+  /** Process status string (R, S, D, Z, T). */
+  status: string;
+}
+
+export interface ContainerState {
+  id: string;
+  name: string;
+  /** Full status string from docker ps (e.g. "Up 2 hours", "Exited (0) 3 min ago"). */
+  status: string;
+}
+
+export interface DiskMount {
+  mount: string;
+  total_bytes: number;
+  used_bytes: number;
+  avail_bytes: number;
+  /** Usage as a percentage 0–100. */
+  use_percent: number;
+}
+
+export interface NetworkConnection {
+  proto: string;
+  local_addr: string;
+  foreign_addr: string;
+  state: string;
+}
+
+export interface EnvironmentSnapshot {
+  captured_at: string;
+  processes: ProcessInfo[];
+  containers: ContainerState[];
+  disk_mounts: DiskMount[];
+  /** Available RAM in megabytes. */
+  available_memory_mb: number;
+  network_connections: NetworkConnection[];
+}
+
+export type ChangeClassification = 'routine' | 'notable' | 'urgent';
+
+export interface EnvironmentDelta {
+  /** Short machine-readable field identifier (e.g. "disk:/", "memory", "container:nginx"). */
+  field: string;
+  classification: ChangeClassification;
+  /** Human-readable description of the change. Never includes raw command output. */
+  description: string;
+  prev_value?: unknown;
+  curr_value?: unknown;
+}
+
+export interface SnapshotDelta {
+  timestamp: string;
+  deltas: EnvironmentDelta[];
+  has_urgent: boolean;
+  has_notable: boolean;
+}
+
 // ── Heartbeat & Playbooks ─────────────────────────────────────────────────────
 
 export type PlaybookTriggerType =

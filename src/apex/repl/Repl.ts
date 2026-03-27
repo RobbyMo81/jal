@@ -66,12 +66,13 @@ export class Repl {
   // ── Public lifecycle ──────────────────────────────────────────────────────────
 
   /**
-   * Start the runtime, print the banner, and enter the REPL loop.
+   * Start the runtime, print the banner, print ambient status, and enter the REPL loop.
    * Returns once the user types `exit` and the runtime has stopped.
    */
   async run(): Promise<void> {
     await this.runtime.start();
     this.printBanner();
+    this.printAmbientStatus();
 
     try {
       await this.replLoop();
@@ -358,6 +359,26 @@ export class Repl {
         approved,
       });
     });
+  }
+
+  // ── Ambient status ────────────────────────────────────────────────────────────
+
+  /**
+   * Print the latest heartbeat narrative before the first REPL prompt.
+   * Shows what changed, what is urgent, and what is healthy since last session.
+   * Only printed if a narrative exists in durable context.
+   */
+  private printAmbientStatus(): void {
+    const narrative = this.runtime.heartbeatNarrative;
+    if (!narrative) return;
+
+    this.writeLine('');
+    this.writeLine('─── Ambient Status (last heartbeat narrative) ──────');
+    for (const line of narrative.split('\n')) {
+      this.writeLine(`  ${line}`);
+    }
+    this.writeLine('────────────────────────────────────────────────────');
+    this.writeLine('');
   }
 
   // ── Banner ────────────────────────────────────────────────────────────────────

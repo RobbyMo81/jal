@@ -351,3 +351,27 @@ can consume. Do not build the UI.
 - `package.json` (added ts-node devDependency)
 - `tests/runtime/ApexRuntime.test.ts` (new)
 - `tests/repl/Repl.test.ts` (new)
+
+## JAL-010 — 2026-03-26
+### Pattern Discovered
+- `SnapshotCollector` is fully injectable via `IHeartbeatShell` — all five collectors (processes, containers, disk, memory, network) are independently testable with `StubShell`.
+- `DeltaAnalyzer.analyze(null, curr)` returns empty deltas on first pulse — callers need not special-case this; the null-prev contract is part of the public API.
+- `HeartbeatScheduler` accumulates `pendingNarrativeDeltas` across pulses and resets them only on narrative write. `narrativePulsesN` is configurable per-instance (default 12, env `APEX_NARRATIVE_PULSES`).
+- Heartbeat narratives bypass `MemoryManager.promoteToDurable()` and write directly to `DurableStore` — they are system-generated context, not user-memory promotions.
+- `ApexRuntime.identityDocsDir` defaults to `src/apex/` (via `__dirname`). Override with `identityDocsDir` option in tests to avoid polluting the real identity docs.
+### Gotcha
+- `DurableStore` must have a `has(id)` method for tests — verify it exists before adding narrative-write assertions.
+- Soul.md and Behavior.md must live at `src/apex/` (not `src/`) — `APEX_SRC_DIR` resolves to `path.join(__dirname, '..')` from `src/apex/runtime/`.
+- `CapturingAuditLog` must be exported from `src/apex/policy/AuditLog` for test files to use it. If missing, add it or create a local stub.
+### Files Modified
+- `src/apex/heartbeat/EnvironmentSnapshot.ts` (new)
+- `src/apex/heartbeat/DeltaAnalyzer.ts` (new)
+- `src/apex/heartbeat/HeartbeatScheduler.ts` (updated — JAL-010 integration)
+- `src/apex/runtime/ApexRuntime.ts` (updated — identity doc loading + narrative read)
+- `src/apex/repl/Repl.ts` (updated — ambient status print)
+- `src/apex/types/index.ts` (updated — JAL-010 types added)
+- `src/apex/Soul.md` (new)
+- `src/apex/Behavior.md` (new)
+- `tests/heartbeat/EnvironmentSnapshot.test.ts` (new)
+- `tests/heartbeat/DeltaAnalyzer.test.ts` (new)
+- `tests/heartbeat/ContextAwareness.test.ts` (new)
