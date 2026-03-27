@@ -237,6 +237,139 @@
         "Snapshot collection is read-only — no writes to system state",
         "Narrative summarization never includes credentials, tokens, or raw command output"
       ]
+    },
+    {
+      "id": "JAL-011",
+      "title": "Natural Language Goal Loop",
+      "priority": 11,
+      "passes": false,
+      "description": "Wire ProviderGateway into a plan-execute-observe agent loop. Kirk states a goal in natural language. Apex decomposes it into steps, classifies each through TieredFirewall, executes with streaming output, self-corrects on failure, and reports completion. This is the core of what makes Apex an agent rather than a shell wrapper.",
+      "acceptanceCriteria": [
+        "REPL accepts `goal <natural language>` command and routes it through the goal loop.",
+        "Goal loop prompt includes: Soul.md identity, Behavior.md operational rules, current heartbeat narrative, available tools (shell, docker, file ops), the stated goal, and outputs of prior steps in the current loop.",
+        "Apex decomposes the goal into an ordered list of concrete steps and executes them sequentially, streaming output to the REPL as each step runs.",
+        "Each step is classified through TieredFirewall before execution. Tier 1 runs immediately. Tier 2 pauses the loop, prompts for approval, and resumes or aborts based on response. Tier 3 aborts the loop with a clear explanation.",
+        "On step failure, Apex retries up to 2 times with the error output included in the LLM context. After 2 failures, Apex reports what it tried, what failed, and what it recommends — then stops.",
+        "Each completed goal loop writes an execution trace to episodic memory: goal, steps attempted, outcomes, and any errors.",
+        "Goal loop state is checkpointed after each completed step so a crash can resume from the last successful step.",
+        "On completion, Apex prints a plain-English summary: what was done, what changed, anything Kirk should know."
+      ],
+      "technicalNotes": "GoalLoop lives at src/apex/agent/GoalLoop.ts. Uses ProviderGateway (JAL-005) for LLM calls. Reads Soul.md and Behavior.md from ApexRuntime working memory — do not re-read from disk. Steps are typed as GoalStep: { id, description, command, tool, tier, status, output, error }. Checkpoint each step via CheckpointStore (JAL-007). Write execution trace via EpisodicStore (JAL-008).",
+      "safetyGates": [
+        "Every step classified through TieredFirewall before execution — no bypass",
+        "Tier 3 always aborts the goal loop — never prompts",
+        "Credentials and tokens never included in LLM prompt context"
+      ]
+    },
+    {
+      "id": "JAL-012",
+      "title": "Expanded Tool Catalog",
+      "priority": 12,
+      "passes": false,
+      "description": "Extend Apex's built-in tool set beyond shell and Docker so the goal loop has richer primitives to work with. All tools flow through TieredFirewall and produce structured results the LLM can reason about.",
+      "acceptanceCriteria": [
+        "File tools: read <path>, write <path> <content>, list <dir>, search <pattern> <dir> (grep), diff <path1> <path2>. All subject to PolicyFileOps tier classification.",
+        "Process tools: ps (list all), kill <pid> (Tier 2), top-n <n> (top N by CPU). Read-only ops are Tier 1; kill is Tier 2.",
+        "Network tools: ping <host>, port-check <host> <port>, curl <url> (GET only, Tier 1). No write network ops in Phase 2.",
+        "Log tools: tail <path> <lines>, log-grep <pattern> <path>. Both Tier 1 read-only.",
+        "System tools: env (environment variables, redacted for secrets), uptime, df (disk), free (memory), which <binary>.",
+        "All tools return a structured ToolResult: { tool, args, tier, exit_code, stdout, stderr, duration_ms } compatible with GoalLoop step output.",
+        "GoalLoop prompt includes the tool catalog so the LLM knows what is available.",
+        "All tool invocations are audit-logged with tool name, args, tier decision, and outcome."
+      ],
+      "technicalNotes": "Tool catalog lives at src/apex/tools/. Each tool implements ITool: { name, description, tier, execute(args): Promise<ToolResult> }. ToolRegistry at src/apex/tools/ToolRegistry.ts registers all tools and exposes catalog() for LLM context injection. Tools delegate execution to ShellEngine or PolicyFileOps — never spawn processes directly.",
+      "safetyGates": [
+        "curl restricted to GET — no POST/PUT/DELETE in Phase 2",
+        "env output redacts values matching secret patterns (token, key, password, secret)",
+        "kill always Tier 2 regardless of PID"
+      ]
+    },
+    {
+      "id": "JAL-013",
+      "title": "Canvas Backend",
+      "priority": 13,
+      "passes": false,
+      "description": "Build the real-time event server that Canvas frontend will connect to. Streams system status, command output, heartbeat pulses, and approval requests over WebSocket. Exposes a REST API for task history, memory inspection, and policy management.",
+      "acceptanceCriteria": [
+        "WebSocket server starts on configurable port (default 7474) when ApexRuntime starts. Clients connect and immediately receive a full system snapshot as the first message.",
+        "Event types streamed to Canvas: system.status (CPU, memory, disk, containers), command.output (incremental chunks), approval.requested (Tier 2 pause), approval.resolved, heartbeat.pulse, task.started, task.completed, task.failed.",
+        "REST API endpoints: GET /status (current system state), GET /tasks (recent task history), GET /memory/episodic (recent episodic entries), GET /memory/durable (durable context), GET /policy/allowlist, POST /approvals/:id/approve, POST /approvals/:id/deny.",
+        "All WebSocket events use the outbound envelope from PRD §14.2: event_id, event_type, task_id, tier, created_at, payload.",
+        "WebSocket connections are authenticated via a session token generated at ApexRuntime start and printed to the REPL on startup.",
+        "Canvas server binds to localhost only by default — not exposed to network without explicit config.",
+        "All approval POST endpoints require the session token in Authorization header."
+      ],
+      "technicalNotes": "Canvas backend at src/apex/canvas/CanvasServer.ts using Node.js http + ws (WebSocket library). REST routes at src/apex/canvas/routes/. EventBus at src/apex/canvas/EventBus.ts — ApexRuntime publishes to EventBus; CanvasServer subscribes and fans out to connected clients. Bind to 127.0.0.1 only.",
+      "safetyGates": [
+        "Binds to 127.0.0.1 only — never 0.0.0.0 without explicit opt-in",
+        "Session token required for all approval endpoints",
+        "No credentials or raw secrets in any streamed event payload"
+      ]
+    },
+    {
+      "id": "JAL-014",
+      "title": "Canvas Frontend",
+      "priority": 14,
+      "passes": false,
+      "description": "Build the real-time operational dashboard that connects to the Canvas backend. Shows live system state, terminal output, heartbeat status, approval surfaces, and memory panel. Built with React + Vite, served by the Canvas backend.",
+      "acceptanceCriteria": [
+        "React + Vite app served as static files by CanvasServer at GET /canvas. Opens in browser at http://localhost:7474/canvas.",
+        "System dashboard panel: live CPU, RAM, disk usage bars, container list with status badges. Updates on every system.status event.",
+        "Terminal mirror panel: displays incremental command output chunks as they arrive via command.output events. Scrolls automatically. Preserves last 500 lines.",
+        "Approval surface: when approval.requested event arrives, a modal appears showing action description, risk reason, tier, and Approve / Deny buttons. Buttons POST to /approvals/:id/approve or /approvals/:id/deny with session token.",
+        "Heartbeat panel: shows last pulse timestamp, last narrative summary, and a timeline of recent notable/urgent events.",
+        "Memory panel: lists recent episodic entries (last 20) and all durable context keys with values. Read-only in Phase 2.",
+        "Connection status indicator: shows connected/reconnecting/disconnected. Auto-reconnects with exponential backoff on disconnect.",
+        "No external UI library dependencies beyond React and Vite — keep the bundle minimal."
+      ],
+      "technicalNotes": "Canvas frontend at src/apex/canvas/ui/. Built with Vite, output to src/apex/canvas/ui/dist/ which CanvasServer serves statically. WebSocket connects to ws://localhost:7474/ws with session token as query param. State managed with React useState/useReducer — no Redux. Components: SystemDashboard, TerminalMirror, ApprovalModal, HeartbeatPanel, MemoryPanel.",
+      "safetyGates": [
+        "Session token sent as query param on WebSocket connect — never in localStorage",
+        "Approval buttons disabled after first click to prevent double-submit"
+      ]
+    },
+    {
+      "id": "JAL-015",
+      "title": "Reasoning & Context Optimization",
+      "priority": 15,
+      "passes": false,
+      "description": "Make Apex smarter about what context it includes in LLM calls. Relevance-score episodic memory retrieval, optimize context packing against the budget model, and summarize long task histories so goal loops stay coherent across complex multi-step operations.",
+      "acceptanceCriteria": [
+        "Episodic memory retrieval ranks entries by relevance to the current goal using keyword overlap and recency score (recency weight 0.4, keyword overlap weight 0.6). Top-K entries (default K=10) are included in goal loop context.",
+        "Context packing respects the ContextBudget model (JAL-008): system_policy 25%, active_task 35%, recent_actions 25%, retrieved_memory 15%. If any segment exceeds its allocation, truncate per the defined order.",
+        "Goal loop task histories longer than 2000 tokens are summarized via ProviderGateway before being included in the next LLM call. Summary replaces raw history in the prompt; raw history is retained in episodic memory.",
+        "GoalLoop tracks token usage per step and logs a warning when approaching 80% of the model's context limit.",
+        "Relevance scorer is deterministic and unit-testable — not LLM-driven. Uses term frequency against a keyword index built from the goal statement.",
+        "All context optimization decisions are logged at debug level with segment sizes and truncation actions taken."
+      ],
+      "technicalNotes": "RelevanceScorer at src/apex/memory/RelevanceScorer.ts. ContextPacker at src/apex/memory/ContextPacker.ts — wraps existing ContextBudget. Summarizer at src/apex/agent/Summarizer.ts — calls ProviderGateway with a compact summarization prompt. Wire into GoalLoop at context assembly time.",
+      "safetyGates": [
+        "Relevance scorer never includes durable memory entries marked sensitive",
+        "Summarizer never includes credentials, tokens, or raw secrets in prompt"
+      ]
+    },
+    {
+      "id": "JAL-016",
+      "title": "Slack & Telegram Plugin Integration",
+      "priority": 16,
+      "passes": false,
+      "description": "Implement the Phase 2 collaboration plugin layer per PRD §14. Apex can send alerts, task summaries, and approval requests to Slack and Telegram. Operators can approve or deny Tier 2 actions from chat. Uses polling mode by default — no inbound webhooks required.",
+      "acceptanceCriteria": [
+        "Plugin coordinator runs as a local service inside ApexRuntime. Maintains per-workspace message queues at ~/.apex/state/plugin-queues/. Exposes GET /apex/plugin-actions/:workspace_id and POST /apex/plugin-actions/:workspace_id/ack/:action_id.",
+        "Outbound events use the §14.2 envelope: event_id (UUID), event_type, workspace_id, task_id, tier, created_at, payload, redaction_level, signature (HMAC-SHA256).",
+        "Slack plugin: sends approval.requested as an interactive message with Approve/Deny buttons. Polls coordinator for inbound actions every 10 seconds. Bot scopes: chat:write, interactions:read.",
+        "Telegram plugin: sends approval.requested as a message with inline keyboard buttons. Same polling contract as Slack.",
+        "Approval tokens are single-use, 10-minute TTL, bound to workspace_id + approval_id. Tokens are invalidated on first use or expiry.",
+        "Actor identity mapping: ~/.apex/config/plugin-actors.json maps Slack/Telegram actor IDs to local Apex identities. Unmapped actors are rejected and audit-logged.",
+        "Plugin disconnect: in-flight approval tokens are immediately expired. Canvas reverts to HITL-only mode and notifies operator.",
+        "Redaction level standard applied by default: omits code snippets, file paths, env var names. Only task goal, risk class, and approval chain visible in chat."
+      ],
+      "technicalNotes": "Plugin coordinator at src/apex/plugins/PluginCoordinator.ts. Slack adapter at src/apex/plugins/SlackPlugin.ts. Telegram adapter at src/apex/plugins/TelegramPlugin.ts. Both implement IPlugin: { send(event), poll(): InboundAction[] }. Bot tokens stored in OS keychain via SecretToolKeychain — never in config files. See PRD §14 for full contract.",
+      "safetyGates": [
+        "HMAC-SHA256 signature verified on every inbound action",
+        "Unmapped actors always rejected — no fallback",
+        "Bot tokens stored in OS keychain only — never written to disk or logged"
+      ]
     }
   ]
 }

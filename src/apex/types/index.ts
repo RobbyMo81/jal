@@ -444,6 +444,32 @@ export interface ToolOutputChunk {
   was_chunked: boolean;
 }
 
+// ── Goal Loop (JAL-011) ───────────────────────────────────────────────────────
+
+export type GoalStepTool = 'shell' | 'docker' | 'fileops';
+
+/**
+ * A single step within a GoalLoop execution.
+ * Decomposed from a natural-language goal by the LLM, then executed sequentially.
+ */
+export interface GoalStep {
+  /** Unique identifier within this goal run (e.g. "step-1"). */
+  id: string;
+  /** Human-readable description of what this step does. */
+  description: string;
+  /** Shell command (or tool-specific arg string) to execute. */
+  command: string;
+  /** Which execution tool handles this step. */
+  tool: GoalStepTool;
+  /** Tier determined by TieredFirewall pre-classification. Default 1 before classification. */
+  tier: PolicyTier;
+  status: StepStatus;
+  /** Combined stdout+stderr captured during execution. */
+  output: string;
+  /** Last error message if the step failed. */
+  error: string;
+}
+
 // ── Environment Snapshot (JAL-010) ────────────────────────────────────────────
 
 export interface ProcessInfo {

@@ -19,6 +19,7 @@
 
 import * as readline from 'readline';
 import { ApexRuntime, ApexRuntimeOptions } from '../runtime/ApexRuntime';
+import { GoalLoop } from '../agent/GoalLoop';
 import { ApprovalToken } from '../types';
 
 // ── REPL options ──────────────────────────────────────────────────────────────
@@ -103,6 +104,10 @@ export class Repl {
     const [cmd, ...rest] = line.split(/\s+/);
 
     switch (cmd?.toLowerCase()) {
+      case 'goal':
+        await this.handleGoal(rest.join(' '));
+        return false;
+
       case 'run':
         await this.handleRun(rest.join(' '));
         return false;
@@ -286,6 +291,46 @@ export class Repl {
     }
   }
 
+  private async handleGoal(goal: string): Promise<void> {
+    if (!goal) {
+      this.writeLine('Usage: goal <natural language description>');
+      return;
+    }
+
+    this.runtime.auditLog.write({
+      timestamp: new Date().toISOString(),
+      level: 'info',
+      service: 'Repl',
+      message: `Goal loop started: ${goal}`,
+      action: 'repl.goal.start',
+      goal,
+    });
+
+    const loop = new GoalLoop(
+      this.runtime,
+      this.runtime.providerGateway,
+      {
+        onChunk: (text) => this.write(text),
+      }
+    );
+
+    try {
+      await loop.run(goal);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.writeLine(`[APEX] Goal loop error: ${msg}`);
+    }
+
+    this.runtime.auditLog.write({
+      timestamp: new Date().toISOString(),
+      level: 'info',
+      service: 'Repl',
+      message: `Goal loop finished: ${goal}`,
+      action: 'repl.goal.finish',
+      goal,
+    });
+  }
+
   private handleStatus(): void {
     const activeExecs = this.runtime.shellEngine.getActiveExecutions();
     const heartbeatRunning = this.runtime.heartbeat.isRunning;
@@ -311,6 +356,7 @@ export class Repl {
 
   private handleHelp(): void {
     this.writeLine('Available commands:');
+    this.writeLine('  goal <natural language>            Run the agent goal loop');
     this.writeLine('  run <command>                      Execute a shell command');
     this.writeLine('  docker list                        List all containers');
     this.writeLine('  docker start <id>                  Start a container');

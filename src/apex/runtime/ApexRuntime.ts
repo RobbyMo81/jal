@@ -24,6 +24,7 @@ import { WorkspaceRootsConfig } from '../fileops/WorkspaceRootsConfig';
 import { AuthManager } from '../auth/AuthManager';
 import { IKeychain } from '../auth/IKeychain';
 import { MemoryKeychain } from '../auth/MemoryKeychain';
+import { ProviderGateway, StubProviderAdapter } from '../auth/ProviderGateway';
 import { HeartbeatScheduler } from '../heartbeat/HeartbeatScheduler';
 import { CheckpointStore } from '../checkpoint/CheckpointStore';
 import { MemoryManager } from '../memory/MemoryManager';
@@ -56,6 +57,12 @@ export interface ApexRuntimeOptions {
    * Defaults to src/apex/ (resolved via __dirname).
    */
   identityDocsDir?: string;
+  /**
+   * Inject a pre-configured ProviderGateway for GoalLoop (JAL-011).
+   * If not provided, a stub gateway is created with StubProviderAdapter
+   * and a Phase 1 stub token (for dev/test only).
+   */
+  providerGateway?: ProviderGateway;
 }
 
 // ── ApexRuntime ────────────────────────────────────────────────────────────────
@@ -75,10 +82,14 @@ export class ApexRuntime {
   readonly heartbeat: HeartbeatScheduler;
   readonly checkpointStore: CheckpointStore;
   readonly memoryManager: MemoryManager;
+  /** Provider-agnostic LLM gateway for GoalLoop (JAL-011). */
+  readonly providerGateway: ProviderGateway;
 
   private readonly apexHome: string;
   private readonly identityDocsDir: string;
   private readonly durableStore: DurableStore;
+  /** True when a stub ProviderGateway was auto-created (no real gateway injected). */
+  private readonly isStubGateway: boolean;
 
   /**
    * Identity documents loaded at session start.
@@ -143,6 +154,21 @@ export class ApexRuntime {
 
     this.checkpointStore = new CheckpointStore(options.stateDir);
     this.memoryManager = new MemoryManager(options.stateDir);
+
+    // Provider gateway — injected or stub for Phase 1
+    if (options.providerGateway) {
+      this.providerGateway = options.providerGateway;
+      this.isStubGateway = false;
+    } else {
+      this.providerGateway = new ProviderGateway({
+        authManager: this.authManager,
+        config: { provider: 'stub', model: 'stub-model' },
+      });
+      this.providerGateway.registerAdapter(
+        new StubProviderAdapter('stub', '[stub response]')
+      );
+      this.isStubGateway = true;
+    }
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -159,6 +185,14 @@ export class ApexRuntime {
     this.ensureApexDirs();
     this.loadIdentityDocs();
     this.loadHeartbeatNarrative();
+    // Stub provider auto-login for Phase 1 (only when no real gateway was injected)
+    if (this.isStubGateway) {
+      await this.authManager.login('stub', 'stub-token-phase1', {
+        auth_method: 'cli-hook',
+        expires_at: null,
+      });
+    }
+
     this.heartbeat.start();
     this.auditLog.write({
       timestamp: new Date().toISOString(),

@@ -1,7 +1,7 @@
 # Apex — Behavior Document
 **Classification:** Operational · Read at every session start · Governs all decisions
 **Companion to:** Soul.md
-**Owner:** Kirk
+
 
 ---
 

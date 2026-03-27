@@ -375,3 +375,19 @@ can consume. Do not build the UI.
 - `tests/heartbeat/EnvironmentSnapshot.test.ts` (new)
 - `tests/heartbeat/DeltaAnalyzer.test.ts` (new)
 - `tests/heartbeat/ContextAwareness.test.ts` (new)
+
+## [JAL-011] — 2026-03-27
+### Pattern Discovered
+- `GoalLoop` at `src/apex/agent/GoalLoop.ts` pre-classifies each step via `runtime.firewall.classify()` BEFORE execution, then executes via a separate `bypassEngine = new ShellEngine()` (no firewall). This avoids double Tier-2 prompting that would occur if shellEngine re-classified after GoalLoop already got approval.
+- `ApexRuntime.providerGateway` is now a public field. If not injected via `ApexRuntimeOptions.providerGateway`, a StubProviderAdapter is registered and `authManager.login('stub', ...)` is called in `start()`. Tests inject their own gateway.
+- LLM JSON parsing extracts the first `[...]` block from the response — handles surrounding text gracefully without breaking on preamble.
+### Gotcha
+- `bypassEngine` has no firewall — GoalLoop MUST call `runtime.firewall.classify()` before every `bypassEngine.exec()` call. Never skip this or Tier 3 commands will execute.
+- The stub gateway auto-login (`auth_method: 'cli-hook'`) only runs when `isStubGateway === true`. Injected gateways must pre-authenticate their own providers in tests.
+- Checkpoint `policy_snapshot_hash` uses a deterministic dummy hash in Phase 1 (no actual policy snapshot file). Phase 2 should wire this to the real policy file hash.
+### Files Modified
+- `src/apex/agent/GoalLoop.ts` (new)
+- `src/apex/runtime/ApexRuntime.ts` (updated — providerGateway field + stub auto-login)
+- `src/apex/repl/Repl.ts` (updated — goal command dispatch + handleGoal)
+- `src/apex/types/index.ts` (updated — GoalStep + GoalStepTool types)
+- `tests/agent/GoalLoop.test.ts` (new — 15 tests)
