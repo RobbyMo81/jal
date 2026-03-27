@@ -685,3 +685,105 @@ export interface HeartbeatCycleResult {
   playbooks_staged: string[];
   errors: string[];
 }
+
+// ── Plugin Coordinator (JAL-016) ─────────────────────────────────────────────
+
+/**
+ * Redaction level applied to outbound plugin events.
+ * 'standard' omits code snippets, file paths, and env var names.
+ * 'full' strips all content — only structural metadata is visible.
+ */
+export type RedactionLevel = 'standard' | 'full' | 'none';
+
+/**
+ * Outbound plugin event envelope (PRD §14.2).
+ * Extends the CanvasEvent shape with plugin-specific fields.
+ */
+export interface PluginEvent {
+  event_id: string;
+  event_type: CanvasEventType;
+  workspace_id: string;
+  task_id: string | null;
+  tier: PolicyTier | null;
+  created_at: string;
+  payload: Record<string, unknown>;
+  redaction_level: RedactionLevel;
+  /** HMAC-SHA256 signature over canonical JSON of all other fields. */
+  signature: string;
+}
+
+/**
+ * An inbound action arriving from a chat platform (Slack/Telegram) to
+ * the plugin coordinator queue.
+ */
+export interface InboundAction {
+  action_id: string;
+  workspace_id: string;
+  /** 'approve' | 'deny' are the two approval responses. */
+  action_type: 'approve' | 'deny';
+  /** Platform-specific actor identifier (Slack user ID, Telegram user ID, etc.). */
+  actor_platform_id: string;
+  /** Which plugin sent this action (e.g. 'slack', 'telegram'). */
+  plugin_name: string;
+  /** The approval_id this action targets (matches PluginApprovalToken.approval_id). */
+  approval_id: string;
+  /**
+   * The PluginApprovalToken.token_id issued when the approval button was sent.
+   * Used by consumeToken() to validate the single-use approval gate.
+   */
+  token: string;
+  /**
+   * HMAC-SHA256 signature of this action (all fields except signature itself).
+   * Used to verify the relay is authorized and the payload was not tampered.
+   */
+  signature: string;
+  received_at: string;
+}
+
+/**
+ * Single-use approval token for plugin-based approvals.
+ * Bound to workspace_id + approval_id.
+ * TTL: 10 minutes. Invalidated on first use or expiry.
+ */
+export interface PluginApprovalToken {
+  token_id: string;
+  approval_id: string;
+  workspace_id: string;
+  expires_at: string;
+  used: boolean;
+  created_at: string;
+}
+
+/**
+ * Mapping entry from a platform actor identity to a local Apex identity.
+ * Stored in ~/.apex/config/plugin-actors.json.
+ */
+export interface PluginActorEntry {
+  /** Platform identifier — Slack user ID ('U12345') or Telegram user ID (numeric string). */
+  platform_id: string;
+  plugin_name: string;
+  /** Local Apex identity label (e.g. 'kirk', 'operator'). */
+  apex_identity: string;
+}
+
+/** Shape of ~/.apex/config/plugin-actors.json */
+export interface PluginActorMap {
+  version: number;
+  actors: PluginActorEntry[];
+}
+
+/**
+ * IPlugin — contract every chat platform adapter must satisfy.
+ */
+export interface IPlugin {
+  readonly name: string;
+  /** Send an outbound event to the platform (e.g. post an approval request). */
+  send(event: PluginEvent): Promise<void>;
+  /**
+   * Poll for inbound actions from the platform.
+   * Returns any new actions collected since the last poll.
+   */
+  poll(): Promise<InboundAction[]>;
+  /** Disconnect: stop polling, cancel any in-flight network requests. */
+  disconnect(): void;
+}

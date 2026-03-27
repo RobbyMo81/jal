@@ -40,6 +40,7 @@ import { handleTasks } from './routes/taskRoutes';
 import { handleEpisodic, handleDurable } from './routes/memoryRoutes';
 import { handleAllowlist } from './routes/policyRoutes';
 import { handleApprove, handleDeny, isAuthorized } from './routes/approvalRoutes';
+import { PluginCoordinator } from '../plugins/PluginCoordinator';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -88,6 +89,10 @@ export interface CanvasServerDeps {
   auditLog: IAuditLog;
   /** Called to collect a fresh environment snapshot (used for initial WS snapshot + GET /status). */
   getSnapshot: () => EnvironmentSnapshot;
+  /**
+   * Plugin coordinator (JAL-016). Optional — if not provided, plugin routes return 404.
+   */
+  pluginCoordinator?: PluginCoordinator;
 }
 
 // ── CanvasServerOptions ───────────────────────────────────────────────────────
@@ -369,6 +374,56 @@ export class CanvasServer {
         approvalService: this.deps.approvalService,
         sessionToken: this.deps.sessionToken,
       }, id);
+      return;
+    }
+
+    // GET /apex/plugin-actions/:workspace_id (JAL-016)
+    const pluginQueueMatch = /^\/apex\/plugin-actions\/([^/]+)$/.exec(pathname);
+    if (method === 'GET' && pluginQueueMatch) {
+      const workspaceId = decodeURIComponent(pluginQueueMatch[1]!);
+      if (!this.deps.pluginCoordinator) {
+        sendJson(res, 404, { success: false, error: 'Plugin coordinator not configured' });
+        return;
+      }
+      const actions = this.deps.pluginCoordinator.dequeueActions(workspaceId);
+      sendJson(res, 200, { success: true, actions });
+      return;
+    }
+
+    // POST /apex/plugin-actions/:workspace_id/ack/:action_id (JAL-016)
+    const pluginAckMatch = /^\/apex\/plugin-actions\/([^/]+)\/ack\/([^/]+)$/.exec(pathname);
+    if (method === 'POST' && pluginAckMatch) {
+      const workspaceId = decodeURIComponent(pluginAckMatch[1]!);
+      const actionId = decodeURIComponent(pluginAckMatch[2]!);
+      if (!this.deps.pluginCoordinator) {
+        sendJson(res, 404, { success: false, error: 'Plugin coordinator not configured' });
+        return;
+      }
+      // Read POST body
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>;
+          const action = {
+            action_id: actionId,
+            workspace_id: workspaceId,
+            action_type: body['action_type'] as 'approve' | 'deny',
+            actor_platform_id: body['actor_platform_id'] as string,
+            plugin_name: body['plugin_name'] as string,
+            approval_id: body['approval_id'] as string,
+            /** token = PluginApprovalToken.token_id (single-use approval gate) */
+            token: body['token'] as string,
+            /** signature = HMAC-SHA256 of all other fields (relay authorization) */
+            signature: body['signature'] as string,
+            received_at: new Date().toISOString(),
+          };
+          const result = this.deps.pluginCoordinator!.acknowledgeAction(workspaceId, action);
+          sendJson(res, result.success ? 200 : 403, result);
+        } catch {
+          sendJson(res, 400, { success: false, error: 'Invalid request body' });
+        }
+      });
       return;
     }
 

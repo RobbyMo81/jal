@@ -37,6 +37,7 @@ import { EventBus } from '../canvas/EventBus';
 import { CanvasServer, CanvasServerOptions, makeCanvasEvent } from '../canvas/CanvasServer';
 import { SnapshotCollector } from '../heartbeat/EnvironmentSnapshot';
 import { ExecSyncShell } from '../heartbeat/HealthChecks';
+import { PluginCoordinator } from '../plugins/PluginCoordinator';
 import { ReadFileTool, WriteFileTool, ListDirTool, SearchFilesTool, DiffFilesTool } from '../tools/FileTools';
 import { PsTool, KillTool, TopNTool } from '../tools/ProcessTools';
 import { PingTool, PortCheckTool, CurlTool } from '../tools/NetworkTools';
@@ -112,6 +113,11 @@ export class ApexRuntime {
   sessionToken: string | null = null;
   /** Canvas WebSocket + REST server (JAL-013). Null if canvas was disabled in options. */
   readonly canvasServer: CanvasServer | null;
+  /**
+   * Plugin coordinator (JAL-016). Manages Slack/Telegram plugin lifecycle,
+   * approval token issuance, inbound action queues, and outbound event dispatch.
+   */
+  readonly pluginCoordinator: PluginCoordinator;
 
   private readonly apexHome: string;
   private readonly identityDocsDir: string;
@@ -255,6 +261,9 @@ export class ApexRuntime {
     this.toolRegistry.register(new FreeTool(toolCtx));
     this.toolRegistry.register(new WhichTool(toolCtx));
 
+    // Plugin coordinator (JAL-016) — runs as a local service inside ApexRuntime
+    this.pluginCoordinator = new PluginCoordinator({ auditLog: this.auditLog });
+
     // Canvas server — disabled when options.canvas === false (e.g. in unit tests)
     if (options.canvas === false) {
       this.canvasServer = null;
@@ -271,6 +280,7 @@ export class ApexRuntime {
           allowlist: this.allowlist,
           auditLog: this.auditLog,
           getSnapshot: () => snapshotCollector.collect(),
+          pluginCoordinator: this.pluginCoordinator,
         },
         options.canvas ?? {},
       );
@@ -307,6 +317,8 @@ export class ApexRuntime {
     }
 
     this.heartbeat.start();
+    // Start plugin coordinator polling (JAL-016)
+    this.pluginCoordinator.start();
     this.auditLog.write({
       timestamp: new Date().toISOString(),
       level: 'info',
@@ -332,6 +344,8 @@ export class ApexRuntime {
    */
   async stop(): Promise<void> {
     this.heartbeat.stop();
+    // Stop plugin coordinator: expires in-flight tokens and disconnects plugins (JAL-016)
+    this.pluginCoordinator.stop();
 
     for (const [execId] of this.shellEngine.getActiveExecutions()) {
       this.shellEngine.cancel(execId);

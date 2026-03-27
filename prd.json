@@ -352,7 +352,7 @@
       "id": "JAL-016",
       "title": "Slack & Telegram Plugin Integration",
       "priority": 16,
-      "passes": false,
+      "passes": true,
       "description": "Implement the Phase 2 collaboration plugin layer per PRD §14. Apex can send alerts, task summaries, and approval requests to Slack and Telegram. Operators can approve or deny Tier 2 actions from chat. Uses polling mode by default — no inbound webhooks required.",
       "acceptanceCriteria": [
         "Plugin coordinator runs as a local service inside ApexRuntime. Maintains per-workspace message queues at ~/.apex/state/plugin-queues/. Exposes GET /apex/plugin-actions/:workspace_id and POST /apex/plugin-actions/:workspace_id/ack/:action_id.",

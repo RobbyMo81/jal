@@ -464,3 +464,26 @@ can consume. Do not build the UI.
 ### GOTCHAS
 - **[JAL-014] vite.config.ts must set base: /canvas/**: Without base: /canvas/ in vite.config.ts, Vite emits /assets/... URLs which 404 when served under /canvas/ prefix.
 
+
+## JAL-016 — 2026-03-27
+### Pattern Discovered
+- **PluginCoordinator is the single coordination point**: All outbound dispatch, inbound queue management, approval token lifecycle, HMAC signing, and actor identity mapping go through PluginCoordinator. Slack/Telegram adapters are thin I/O wrappers only.
+- **InboundAction has two separate auth fields**: `token` = PluginApprovalToken.token_id (single-use approval gate, UUID); `signature` = HMAC-SHA256 of all other InboundAction fields (relay authorization). These are distinct — don't conflate them.
+- **Approval buttons encode token_id, not the HMAC**: SlackPlugin/TelegramPlugin embed `${token_id}:${workspace_id}:${approval_id}` in button values/callback_data. The relay builds the InboundAction and signs it with HMAC. Never put the HMAC in the button value.
+- **Standard redaction applied by default**: `dispatch()` defaults to `redaction_level: 'standard'` which strips code blocks, file paths, and env var references. Only task goal, risk class, and approval chain should be visible in chat.
+- **timingSafeEqual requires equal-length buffers**: Always validate hex string length and parse success before calling `crypto.timingSafeEqual`. Pass `Buffer.alloc(0)` for invalid inputs, then check `length > 0` before the call.
+### Gotcha
+- **Bot tokens never in constructor args in production**: SlackPlugin/TelegramPlugin accept `token` in options, but the caller MUST load it from SecretToolKeychain first. There is no keychain access inside the plugin files.
+- **Polling mode: plugin.poll() returns []**: Both SlackPlugin and TelegramPlugin return empty arrays from poll() — in Phase 2 polling mode, a relay service pushes actions via POST /apex/plugin-actions/:workspace_id/ack/:action_id. The PluginCoordinator's pollAll() is for future direct-pull adapters.
+- **stop() expires all in-flight tokens immediately**: When PluginCoordinator.stop() is called (e.g. on runtime shutdown or plugin disconnect), all active approval tokens are marked used=true. Canvas reverts to HITL-only mode — this is by design, not a bug.
+- **hmacSecret is session-scoped**: A new HMAC secret is generated per PluginCoordinator instance via `randomBytes(32)`. It is never persisted. Relay services must obtain the signed token values from the coordinator within the same session.
+### Files Modified
+- `src/apex/plugins/PluginCoordinator.ts` (new)
+- `src/apex/plugins/SlackPlugin.ts` (new)
+- `src/apex/plugins/TelegramPlugin.ts` (new)
+- `src/apex/types/index.ts` (added PluginEvent, InboundAction, IPlugin, PluginApprovalToken, PluginActorMap, RedactionLevel)
+- `src/apex/canvas/CanvasServer.ts` (added pluginCoordinator dep + GET/POST /apex/plugin-actions routes)
+- `src/apex/runtime/ApexRuntime.ts` (added pluginCoordinator field, start/stop wiring)
+- `tests/plugins/PluginCoordinator.test.ts` (new — 29 tests)
+- `tests/plugins/SlackPlugin.test.ts` (new — 5 tests)
+- `tests/plugins/TelegramPlugin.test.ts` (new — 5 tests)
