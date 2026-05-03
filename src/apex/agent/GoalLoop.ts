@@ -29,6 +29,7 @@ import * as crypto from 'crypto';
 import { ShellEngine } from '../shell/ShellEngine';
 import { ProviderGateway } from '../auth/ProviderGateway';
 import { EpisodicStore } from '../memory/EpisodicStore';
+import type { JALBrain } from '../brain/JALBrain';
 import { RelevanceScorer } from '../memory/RelevanceScorer';
 import { ContextPacker } from '../memory/ContextPacker';
 import { ContextBudget, approxTokens } from '../memory/ContextBudget';
@@ -75,6 +76,8 @@ export interface GoalLoopOptions {
    * Defaults to no-op.
    */
   debugLog?: (msg: string) => void;
+  /** JAL's persistent brain — when provided, goal traces are logged. */
+  jalBrain?: JALBrain;
 }
 
 // Partial step shape returned by the LLM decomposition prompt.
@@ -101,6 +104,7 @@ export class GoalLoop {
   private readonly summarizer: Summarizer;
   private readonly contextWindow: number;
   private readonly debugLog: (msg: string) => void;
+  private readonly jalBrain: JALBrain | undefined;
 
   constructor(
     private readonly runtime: ApexRuntime,
@@ -119,6 +123,7 @@ export class GoalLoop {
     this.summarizer = new Summarizer(gateway);
     this.contextWindow = options.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
     this.debugLog = options.debugLog ?? ((_msg: string) => { /* no-op */ });
+    this.jalBrain = options.jalBrain;
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -130,6 +135,9 @@ export class GoalLoop {
   async run(goal: string): Promise<void> {
     const taskId = `goal-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     const startedAt = new Date().toISOString();
+
+    this.jalBrain?.setGoal(goal);
+    this.jalBrain?.incrementSession();
 
     this.emit(`\n[APEX] Decomposing goal: "${goal}"\n`);
 
@@ -288,6 +296,12 @@ export class GoalLoop {
 
     // ── Step 3: Write execution trace to episodic memory ─────────────────────
     this.writeExecutionTrace(taskId, goal, steps, startedAt, abortReason);
+
+    // Log goal trace to JALBrain
+    const stepDescs = steps.map(s => `${s.status}: ${s.description}`);
+    const outcome = abortReason ? `aborted: ${abortReason}` : 'completed';
+    this.jalBrain?.logReasoning(goal, stepDescs, outcome);
+    this.jalBrain?.setGoal(null);
 
     // ── Step 4: Print plain-English summary ───────────────────────────────────
     this.printSummary(goal, steps, abortReason);

@@ -1,0 +1,40 @@
+# Project Apex — User-level systemd service (JAL-021)
+# Install: see deploy/install.sh
+# Runs as the current user — no root required.
+# Logs: journalctl --user -u apex -f
+
+[Unit]
+Description=Project Apex — Autonomous Agent Daemon
+Documentation=file:///home/spoq/jal/FORGE.md
+# Start after network and Ollama are available
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/spoq/jal
+
+# Load runtime environment from .env
+# EnvironmentFile requires absolute path — no ~ expansion
+EnvironmentFile=/home/spoq/jal/.env
+
+# nvm-managed node: source nvm shims via a wrapper script
+ExecStart=/home/spoq/jal/deploy/apex-start.sh
+
+# Restart on failure with back-off
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=apex
+
+# Security hardening (user-level constraints)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

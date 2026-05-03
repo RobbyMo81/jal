@@ -311,6 +311,7 @@ export class Repl {
       this.runtime.providerGateway,
       {
         onChunk: (text) => this.write(text),
+        jalBrain: this.runtime.jalBrain,
       }
     );
 

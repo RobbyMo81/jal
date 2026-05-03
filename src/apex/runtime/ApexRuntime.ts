@@ -24,8 +24,17 @@ import { PolicyFileOps } from '../fileops/PolicyFileOps';
 import { WorkspaceRootsConfig } from '../fileops/WorkspaceRootsConfig';
 import { AuthManager } from '../auth/AuthManager';
 import { IKeychain } from '../auth/IKeychain';
-import { MemoryKeychain } from '../auth/MemoryKeychain';
+import { MemoryKeychain } from '../auth/MemoryKeychain'; // kept for test injection via options.keychain
 import { ProviderGateway, StubProviderAdapter } from '../auth/ProviderGateway';
+import { OllamaAdapter } from '../auth/OllamaAdapter';
+import { ClaudeAdapter } from '../auth/ClaudeAdapter';
+import { GeminiAdapter } from '../auth/GeminiAdapter';
+import { OpenAIAdapter } from '../auth/OpenAIAdapter';
+import { FallbackProviderChain } from '../providers/FallbackProviderChain';
+import { GuardianAngle } from '../guardian_angle/GuardianAngle';
+import { JALBrain } from '../brain/JALBrain';
+import { GuardianBrain } from '../brain/GuardianBrain';
+import { createKeychain } from '../auth/KeychainFactory';
 import { HeartbeatScheduler } from '../heartbeat/HeartbeatScheduler';
 import { CheckpointStore } from '../checkpoint/CheckpointStore';
 import { MemoryManager } from '../memory/MemoryManager';
@@ -55,7 +64,7 @@ const APEX_SRC_DIR = join(__dirname, '..');
 export interface ApexRuntimeOptions {
   /** Called when a Tier 2 action requires operator approval (wired to REPL stdin). */
   onApprovalRequired?: (token: ApprovalToken) => void;
-  /** Override keychain implementation. Defaults to MemoryKeychain (Phase 1 only). */
+  /** Override keychain implementation. Defaults to KeychainFactory auto-selection. */
   keychain?: IKeychain;
   /** Override audit log. Defaults to filesystem AuditLog. */
   auditLog?: IAuditLog;
@@ -118,12 +127,19 @@ export class ApexRuntime {
    * approval token issuance, inbound action queues, and outbound event dispatch.
    */
   readonly pluginCoordinator: PluginCoordinator;
+  /** JAL's persistent brain sphere — goal traces, provider events, working memory. */
+  readonly jalBrain: JALBrain;
+  /** Guardian's persistent brain sphere — verification history, domain knowledge. */
+  readonly guardianBrain: GuardianBrain;
 
   private readonly apexHome: string;
   private readonly identityDocsDir: string;
   private readonly durableStore: DurableStore;
   /** True when a stub ProviderGateway was auto-created (no real gateway injected). */
   private readonly isStubGateway: boolean;
+  /** Keychain backend selected by KeychainFactory — logged at start(). */
+  private _keychainSelectionReason: string = '';
+  private _keychainBackend: string = 'injected';
 
   /**
    * Identity documents loaded at session start.
@@ -195,8 +211,17 @@ export class ApexRuntime {
       onApprovalRequired
     );
 
-    // Auth — uses injected or in-memory keychain (Phase 2 will swap in SecretToolKeychain)
-    const keychain: IKeychain = options.keychain ?? new MemoryKeychain();
+    // Auth — uses injected keychain or auto-selects best available backend
+    let keychain: IKeychain;
+    if (options.keychain) {
+      keychain = options.keychain;
+    } else {
+      const selection = createKeychain(options.stateDir);
+      keychain = selection.keychain;
+      // Audit log not yet wired here — keychain selection is logged in start()
+      this._keychainSelectionReason = selection.reason;
+      this._keychainBackend = selection.backend;
+    }
     this.authManager = new AuthManager({ keychain, audit: this.auditLog });
 
     // Memory stores — shared between MemoryManager and HeartbeatScheduler
@@ -213,19 +238,87 @@ export class ApexRuntime {
     this.checkpointStore = new CheckpointStore(options.stateDir);
     this.memoryManager = new MemoryManager(options.stateDir);
 
-    // Provider gateway — injected or stub for Phase 1
+    // Brain spheres — created unconditionally; files are only written when accessed
+    this.jalBrain = new JALBrain(options.stateDir
+      ? join(options.stateDir, '..', 'brains', 'jal')
+      : undefined);
+    this.guardianBrain = new GuardianBrain(options.stateDir
+      ? join(options.stateDir, '..', 'brains', 'guardian')
+      : undefined);
+
+    // Provider gateway — injected, env-configured, or stub fallback
     if (options.providerGateway) {
       this.providerGateway = options.providerGateway;
       this.isStubGateway = false;
     } else {
+      const defaultProvider = process.env['APEX_DEFAULT_PROVIDER'] ?? 'stub';
+      const defaultModel = process.env['APEX_DEFAULT_MODEL'] ?? 'stub-model';
+
       this.providerGateway = new ProviderGateway({
         authManager: this.authManager,
-        config: { provider: 'stub', model: 'stub-model' },
+        config: { provider: defaultProvider, model: defaultModel },
       });
-      this.providerGateway.registerAdapter(
-        new StubProviderAdapter('stub', '[stub response]')
-      );
-      this.isStubGateway = true;
+
+      // Always register stub as fallback
+      this.providerGateway.registerAdapter(new StubProviderAdapter('stub', '[stub response]'));
+
+      // ── Local Ollama adapter (direct, single-model) ───────────────────────
+      const ollamaAdapter = new OllamaAdapter();
+      this.providerGateway.registerAdapter(ollamaAdapter);
+
+      // ── Cloud provider adapters ────────────────────────────────────────────
+      this.providerGateway.registerAdapter(new ClaudeAdapter());
+      this.providerGateway.registerAdapter(new GeminiAdapter());
+      this.providerGateway.registerAdapter(new OpenAIAdapter());
+
+      // ── JAL student chain: qwen3:4b → gemma3:latest (local Ollama) ────────
+      const jalStudentModel = process.env['APEX_DEFAULT_MODEL'] ?? 'qwen3:4b';
+      const jalFallbackModel = process.env['APEX_JAL_FALLBACK_MODEL'] ?? 'gemma3:latest';
+      const jalChain = new FallbackProviderChain('jal-chain', [
+        { adapter: ollamaAdapter, model: jalStudentModel, token: '' },
+        { adapter: ollamaAdapter, model: jalFallbackModel, token: '' },
+      ]);
+      this.providerGateway.registerAdapter(jalChain);
+
+      // ── Guardian M_G chain: Claude → Gemini → OpenAI → gemma3 (local) ────
+      const claudeToken = process.env['ANTHROPIC_API_KEY'] ?? '';
+      const geminiToken = process.env['GEMINI_API_KEY'] ?? '';
+      const openaiToken = process.env['OPENAI_API_KEY'] ?? '';
+      const guardianFallbackModel = process.env['APEX_GUARDIAN_FALLBACK_MODEL'] ?? 'gemma3:latest';
+
+      const guardianChain = new FallbackProviderChain('guardian-chain', [
+        { adapter: new ClaudeAdapter(), model: 'claude-sonnet-4-6', token: claudeToken },
+        { adapter: new GeminiAdapter(), model: 'gemini-2.0-flash', token: geminiToken },
+        { adapter: new OpenAIAdapter(), model: 'gpt-4o', token: openaiToken },
+        { adapter: ollamaAdapter, model: guardianFallbackModel, token: '' },
+      ]);
+      this.providerGateway.registerAdapter(guardianChain);
+
+      // ── Guardian Angle ─────────────────────────────────────────────────────
+      if (process.env['APEX_GUARDIAN_ENABLED'] === 'true') {
+        const studentModel = process.env['APEX_GUARDIAN_STUDENT_MODEL'] ?? jalStudentModel;
+        const guardianModel = process.env['APEX_GUARDIAN_MODEL'] ?? 'claude-sonnet-4-6';
+        const guardianAdapter = new GuardianAngle({
+          studentModel,
+          guardianModel,
+          // Inject pre-built chains
+          studentAdapter: jalChain,
+          guardianAdapter: guardianChain,
+          brain: this.guardianBrain,
+          entropyThreshold: process.env['APEX_GUARDIAN_ENTROPY_THRESHOLD']
+            ? parseFloat(process.env['APEX_GUARDIAN_ENTROPY_THRESHOLD'])
+            : undefined,
+          sleepModeThreshold: process.env['APEX_GUARDIAN_SLEEP_THRESHOLD']
+            ? parseFloat(process.env['APEX_GUARDIAN_SLEEP_THRESHOLD'])
+            : undefined,
+          sleepModeWindow: process.env['APEX_GUARDIAN_SLEEP_WINDOW']
+            ? parseInt(process.env['APEX_GUARDIAN_SLEEP_WINDOW'], 10)
+            : undefined,
+        });
+        this.providerGateway.registerAdapter(guardianAdapter);
+      }
+
+      this.isStubGateway = defaultProvider === 'stub';
     }
 
     // Tool registry — bypass ShellEngine (no firewall) + firewall for pre-classification
@@ -301,13 +394,38 @@ export class ApexRuntime {
     this.ensureApexDirs();
     this.loadIdentityDocs();
     this.loadHeartbeatNarrative();
-    // Stub provider auto-login for Phase 1 (only when no real gateway was injected)
-    if (this.isStubGateway) {
-      await this.authManager.login('stub', 'stub-token-phase1', {
+    // Auto-login stub (always registered as fallback)
+    await this.authManager.login('stub', 'stub-token-phase1', {
+      auth_method: 'cli-hook',
+      expires_at: null,
+    });
+    // Auto-login local adapters — no real credential required
+    for (const provider of ['ollama', 'jal-chain', 'guardian-chain']) {
+      await this.authManager.login(provider, `${provider}-local`, {
         auth_method: 'cli-hook',
         expires_at: null,
       });
     }
+    // Auto-login cloud providers from env — tokens injected per-request by chains
+    for (const [provider, envKey] of [
+      ['claude', 'ANTHROPIC_API_KEY'],
+      ['gemini', 'GEMINI_API_KEY'],
+      ['openai', 'OPENAI_API_KEY'],
+    ] as const) {
+      const token = process.env[envKey];
+      if (token) {
+        await this.authManager.login(provider, token, { auth_method: 'api-key', expires_at: null });
+      }
+    }
+    // Auto-login guardian if enabled
+    if (process.env['APEX_GUARDIAN_ENABLED'] === 'true') {
+      await this.authManager.login('guardian', 'guardian-local', {
+        auth_method: 'cli-hook',
+        expires_at: null,
+      });
+    }
+    // Increment JAL brain session counter
+    this.jalBrain.incrementSession();
 
     // Generate session token for Canvas WebSocket authentication (JAL-013)
     this.sessionToken = randomBytes(32).toString('hex');
@@ -330,6 +448,14 @@ export class ApexRuntime {
         .filter(([, v]) => v !== null)
         .map(([k]) => k),
       canvas_enabled: this.canvasServer !== null,
+    });
+    this.auditLog.write({
+      timestamp: new Date().toISOString(),
+      level: this._keychainBackend === 'memory' ? 'warn' : 'info',
+      service: 'ApexRuntime',
+      message: `Keychain backend: ${this._keychainBackend} — ${this._keychainSelectionReason}`,
+      action: 'runtime.keychain_selected',
+      backend: this._keychainBackend,
     });
   }
 
@@ -471,6 +597,8 @@ export class ApexRuntime {
       join(this.apexHome, 'state', 'outputs'),
       join(this.apexHome, 'state', 'memory'),
       join(this.apexHome, 'config'),
+      join(this.apexHome, 'brains', 'jal'),
+      join(this.apexHome, 'brains', 'guardian'),
     ];
     for (const d of dirs) {
       mkdirSync(d, { recursive: true });
