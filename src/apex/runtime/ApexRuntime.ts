@@ -288,7 +288,7 @@ export class ApexRuntime {
 
       const guardianChain = new FallbackProviderChain('guardian-chain', [
         { adapter: new ClaudeAdapter(), model: 'claude-sonnet-4-6', token: claudeToken },
-        { adapter: new GeminiAdapter(), model: 'gemini-2.0-flash', token: geminiToken },
+        { adapter: new GeminiAdapter(), model: 'gemini-2.5-flash', token: geminiToken },
         { adapter: new OpenAIAdapter(), model: 'gpt-4o', token: openaiToken },
         { adapter: ollamaAdapter, model: guardianFallbackModel, token: '' },
       ]);
