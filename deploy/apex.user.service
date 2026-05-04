@@ -9,6 +9,8 @@ Documentation=file:///home/spoq/jal/FORGE.md
 # Start after network and Ollama are available
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -21,11 +23,9 @@ EnvironmentFile=/home/spoq/jal/.env
 # nvm-managed node: source nvm shims via a wrapper script
 ExecStart=/home/spoq/jal/deploy/apex-start.sh
 
-# Restart on failure with back-off
+# Restart on failure with back-off (StartLimit* keys live in [Unit] since systemd v230)
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=120
-StartLimitBurst=5
 
 # Logging
 StandardOutput=journal
