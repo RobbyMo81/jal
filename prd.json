@@ -495,6 +495,27 @@
       "title": "Hardened Provider Wiring \u2014 99% Uptime",
       "description": "jal-chain (qwen3:4b \u2192 gemma3 local fallback). guardian-chain (Claude \u2192 Gemini \u2192 OpenAI \u2192 gemma3 local). GuardianAngle accepts FallbackProviderChain via IAdapterWithLogprobs. JALBrain wired to GoalLoop. GuardianBrain wired to GuardianAngle. API key env vars added to .env and .env.example.",
       "passes": true
+    },
+    {
+      "id": "JAL-026",
+      "title": "DVU Hardening, Guardian Calibration & Exercise Suite",
+      "priority": 26,
+      "passes": true,
+      "description": "Harden the DVU verification pipeline against parse failures and truncation; calibrate the Guardian Angle entropy gate for models with artificially low logprob entropy; fix the sleep tracker false-signal accumulation; fix GoalLoop self-correction for safety-gate rejections; deliver a comprehensive live exercise suite covering all six Guardian domains.",
+      "acceptanceCriteria": [
+        "parsePoF() uses a balanced-brace JSON extractor (extractFirstJson) that handles } inside quoted strings and strips markdown code fences.",
+        "DVUProtocol.verify() max_tokens raised to 512 \u2014 prevents Gemini from truncating mid-JSON.",
+        "PointOfFailure carries parseError?: boolean flag; parse errors are INCONCLUSIVE, not approved.",
+        "execute() continues (not breaks) on parse error, retrying verification up to maxCycles.",
+        "recordOutcome() wasCorrect excludes parse errors from sleep tracker credit.",
+        "GuardianAngleConfig accepts forcedVerifyDomains (default: shell_commands, code_generation); those domains always invoke Guardian regardless of entropy score.",
+        "Low-entropy bypass path does NOT call sleepTracker.record() \u2014 only actual Guardian verdicts advance the sleep window.",
+        "GoalLoop selfCorrect() detects [ShellEngine] SAFETY GATE: rejections and routes to a specific correction note requiring single-line bash output.",
+        "All correction prompts include the single-line bash constraint to prevent multi-line regressions.",
+        "scripts/exercise.ts exercises 15 LLM + 2 GoalLoop across all 6 Guardian domains with DVU stats, sleep tracker stats, and JALBrain snapshot per run.",
+        "APEX_GUARDIAN_FORCED_DOMAINS env var wired into ApexRuntime.",
+        "902 tests passing, typecheck clean."
+      ]
     }
   ]
 }
