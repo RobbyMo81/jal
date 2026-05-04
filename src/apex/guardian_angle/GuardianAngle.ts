@@ -43,6 +43,7 @@ export class GuardianAngle implements IProviderAdapter {
   private readonly sleepTracker: DomainSleepTracker;
   private readonly interventionLogger: InterventionLogger;
   private readonly maxDVUCycles: number;
+  private readonly forcedVerifyDomains: ReadonlySet<string>;
   private readonly brain: GuardianAngleConfig['brain'];
 
   constructor(config: GuardianAngleConfig) {
@@ -63,6 +64,9 @@ export class GuardianAngle implements IProviderAdapter {
     this.sleepTracker = new DomainSleepTracker(stateDir, config.sleepModeThreshold, config.sleepModeWindow);
     this.interventionLogger = new InterventionLogger(stateDir);
     this.maxDVUCycles = config.maxDVUCycles ?? 2;
+    this.forcedVerifyDomains = new Set(
+      config.forcedVerifyDomains ?? ['shell_commands', 'code_generation']
+    );
   }
 
   /**
@@ -110,9 +114,9 @@ export class GuardianAngle implements IProviderAdapter {
     const draft = chunks.join('');
     const entropy = this.entropyMonitor.assess(draft, domain, result.logprobs);
 
-    // Low entropy → accept draft, update sleep tracker
-    if (!entropy.is_high_entropy) {
-      this.sleepTracker.record(domain, true);
+    // Low entropy + not forced-verify: accept draft without Guardian review
+    if (!entropy.is_high_entropy && !this.forcedVerifyDomains.has(domain)) {
+      // Do NOT record to sleepTracker — only Guardian-verified outcomes count.
       this.brain?.logVerification(domain, this.studentModel, this.guardianModel, entropy.entropy, 0, false);
       return { content: draft, model: result.model, provider: 'guardian', usage: result.usage };
     }
@@ -161,9 +165,9 @@ export class GuardianAngle implements IProviderAdapter {
     const draft = await this.student.completeWithLogprobs(messages, this.studentModel, opts);
     const entropy = this.entropyMonitor.assess(draft.content, domain, draft.logprobs);
 
-    // ── Low entropy: accept draft without Guardian review ─────────────────────
-    if (!entropy.is_high_entropy) {
-      this.sleepTracker.record(domain, true);
+    // ── Low entropy + not a forced-verify domain: accept without Guardian ────
+    if (!entropy.is_high_entropy && !this.forcedVerifyDomains.has(domain)) {
+      // Do NOT record to sleepTracker — only Guardian-verified outcomes count.
       this.brain?.logVerification(domain, this.studentModel, this.guardianModel, entropy.entropy, 0, false);
       return {
         content: draft.content,
@@ -178,7 +182,7 @@ export class GuardianAngle implements IProviderAdapter {
       };
     }
 
-    // ── High entropy: run DVU (reuse draft already fetched above) ────────────
+    // ── High entropy OR forced-verify domain: run DVU ─────────────────────────
     const dvuResult = await this.dvuProtocol.execute(
       messages,
       this.student,
@@ -219,7 +223,8 @@ export class GuardianAngle implements IProviderAdapter {
     originalDraft: string,
     draftModel: string
   ): void {
-    const wasCorrect = result.dvu_cycles === 0 || result.pof?.index === null;
+    // Parse errors are INCONCLUSIVE — never count as correct in the sleep tracker
+    const wasCorrect = !result.pof?.parseError && (result.dvu_cycles === 0 || result.pof?.index === null);
     this.sleepTracker.record(result.domain, wasCorrect);
 
     this.brain?.logVerification(

@@ -314,6 +314,9 @@ export class ApexRuntime {
           sleepModeWindow: process.env['APEX_GUARDIAN_SLEEP_WINDOW']
             ? parseInt(process.env['APEX_GUARDIAN_SLEEP_WINDOW'], 10)
             : undefined,
+          forcedVerifyDomains: process.env['APEX_GUARDIAN_FORCED_DOMAINS']
+            ? process.env['APEX_GUARDIAN_FORCED_DOMAINS'].split(',').map(s => s.trim()) as import('../guardian_angle/types').Domain[]
+            : undefined,
         });
         this.providerGateway.registerAdapter(guardianAdapter);
       }

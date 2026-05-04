@@ -284,6 +284,102 @@ describe('GoalLoop — step failure handling', () => {
   });
 });
 
+// ── Self-correction prompt quality ────────────────────────────────────────────
+
+describe('GoalLoop — self-correction prompt', () => {
+  it('includes SAFETY GATE note when error is a safety gate rejection', async () => {
+    const capturedPrompts: string[] = [];
+    let callCount = 0;
+    const keychain = new MemoryKeychain();
+    const auditLog = new NoOpAuditLog();
+    const authManager = new AuthManager({ keychain, audit: auditLog });
+    await authManager.login('test', 'tok', { auth_method: 'cli-hook', expires_at: null });
+
+    const adapter: IProviderAdapter = {
+      provider: 'test',
+      async complete(msgs: GatewayMessage[], model: string): Promise<CompletionResult> {
+        callCount++;
+        // Record all prompts sent for self-correction (calls 2+)
+        const content = (msgs[0] as GatewayMessage).content;
+        if (typeof content === 'string') capturedPrompts.push(content);
+
+        if (callCount === 1) {
+          // Decompose — return a multi-line command that will be rejected by safety gate
+          return { content: JSON.stringify([
+            { id: 's1', description: 'Count files', command: 'for f in $(ls); do echo $f; done', tool: 'shell' },
+          ]), model, provider: 'test' };
+        }
+        // Correction / recommendation attempts — return a single-line command
+        return { content: 'ls | wc -l', model, provider: 'test' };
+      },
+      async stream(
+        _m: GatewayMessage[], model: string, _t: string, _o: CompletionOptions,
+        onChunk: (c: string) => void
+      ): Promise<CompletionResult> {
+        onChunk('ls | wc -l');
+        return { content: 'ls | wc -l', model, provider: 'test' };
+      },
+    };
+
+    const gw = new ProviderGateway({ authManager, config: { provider: 'test', model: 'm' } });
+    gw.registerAdapter(adapter);
+    const runtime = await buildRuntime(stateDir, gw);
+    const loop = new GoalLoop(runtime, gw, { onChunk: () => {}, stateDir });
+    await loop.run('count files');
+
+    // At least one correction prompt must include SAFETY GATE language
+    const safetyPrompts = capturedPrompts.filter(p => p.includes('SAFETY GATE'));
+    expect(safetyPrompts.length).toBeGreaterThan(0);
+    expect(safetyPrompts[0]).toContain('single-line');
+    await runtime.stop();
+  });
+
+  it('includes single-line constraint in all correction prompts regardless of error type', async () => {
+    const capturedPrompts: string[] = [];
+    let callCount = 0;
+    const keychain = new MemoryKeychain();
+    const auditLog = new NoOpAuditLog();
+    const authManager = new AuthManager({ keychain, audit: auditLog });
+    await authManager.login('test', 'tok', { auth_method: 'cli-hook', expires_at: null });
+
+    const adapter: IProviderAdapter = {
+      provider: 'test',
+      async complete(msgs: GatewayMessage[], model: string): Promise<CompletionResult> {
+        callCount++;
+        const content = (msgs[0] as GatewayMessage).content;
+        if (typeof content === 'string') capturedPrompts.push(content);
+        if (callCount === 1) {
+          return { content: JSON.stringify([
+            { id: 's1', description: 'Failing step', command: 'false', tool: 'shell' },
+          ]), model, provider: 'test' };
+        }
+        return { content: 'true', model, provider: 'test' };
+      },
+      async stream(
+        _m: GatewayMessage[], model: string, _t: string, _o: CompletionOptions,
+        onChunk: (c: string) => void
+      ): Promise<CompletionResult> {
+        onChunk('true');
+        return { content: 'true', model, provider: 'test' };
+      },
+    };
+
+    const gw = new ProviderGateway({ authManager, config: { provider: 'test', model: 'm' } });
+    gw.registerAdapter(adapter);
+    const runtime = await buildRuntime(stateDir, gw);
+    const loop = new GoalLoop(runtime, gw, { onChunk: () => {}, stateDir });
+    await loop.run('run a command');
+
+    // Every correction prompt must include the single-line constraint
+    const correctionPrompts = capturedPrompts.slice(1); // skip decompose call
+    expect(correctionPrompts.length).toBeGreaterThan(0);
+    for (const p of correctionPrompts) {
+      expect(p).toMatch(/single-line/i);
+    }
+    await runtime.stop();
+  });
+});
+
 // ── Checkpointing ──────────────────────────────────────────────────────────────
 
 describe('GoalLoop — checkpointing', () => {

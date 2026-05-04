@@ -45,20 +45,53 @@ function buildVerifyMessages(
 
 // ── PoF response parsing ──────────────────────────────────────────────────────
 
+/**
+ * Extract the first balanced JSON object from a string.
+ * Handles: nested braces, `}` inside quoted strings, escape sequences,
+ * and markdown code fences (```json ... ```).
+ */
+function extractFirstJson(raw: string): string | null {
+  // Strip leading/trailing markdown code fences
+  const stripped = raw
+    .replace(/^```(?:json)?\s*\n?/m, '')
+    .replace(/\n?```\s*$/m, '')
+    .trim();
+
+  const start = stripped.indexOf('{');
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < stripped.length; i++) {
+    const ch = stripped[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return stripped.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 function parsePoF(raw: string, fallbackDomain: Domain): PointOfFailure {
-  const trimmed = raw.trim();
-  const match = trimmed.match(/\{[^}]+\}/);
-  if (!match) {
-    return { index: null, reason: 'guardian parse error — treating as approved', domain: fallbackDomain };
+  const json = extractFirstJson(raw.trim());
+  if (!json) {
+    return { index: null, reason: 'guardian parse error — inconclusive', domain: fallbackDomain, parseError: true };
   }
   try {
-    const parsed = JSON.parse(match[0]) as { pof?: unknown; reason?: unknown; domain?: unknown };
+    const parsed = JSON.parse(json) as { pof?: unknown; reason?: unknown; domain?: unknown };
     const index = typeof parsed.pof === 'number' ? Math.max(0, Math.floor(parsed.pof)) : null;
     const reason = typeof parsed.reason === 'string' ? parsed.reason : 'no reason provided';
     const domain = (typeof parsed.domain === 'string' ? parsed.domain : fallbackDomain) as Domain;
     return { index, reason, domain };
   } catch {
-    return { index: null, reason: 'guardian parse error — treating as approved', domain: fallbackDomain };
+    return { index: null, reason: 'guardian parse error — inconclusive', domain: fallbackDomain, parseError: true };
   }
 }
 
@@ -122,7 +155,8 @@ export class DVUProtocol {
       const pof = await this.verify(messages, draft.content, entropy.domain);
       lastPof = pof;
 
-      if (pof.index === null) break; // Guardian approved
+      if (pof.parseError) continue;  // inconclusive — retry, do not treat as approval
+      if (pof.index === null) break;  // Guardian approved
 
       dvuCycles++;
       // Re-generate from PoF
@@ -157,7 +191,7 @@ export class DVUProtocol {
     const result = await this.guardian.completeWithLogprobs(
       verifyMessages,
       this.guardianModel,
-      { temperature: 0.1, max_tokens: 128 }
+      { temperature: 0.1, max_tokens: 512 }
     );
     return parsePoF(result.content, domain);
   }

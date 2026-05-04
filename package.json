@@ -8,6 +8,7 @@
     "start": "bash ./forge.sh",
     "apex": "ts-node --project tsconfig.json src/apex/main.ts",
     "dry-run": "ts-node --project tsconfig.json scripts/dry-run.ts",
+    "exercise": "ts-node --project tsconfig.json scripts/exercise.ts",
     "remind:opt-in": "ts-node --project tsconfig.json scripts/remind-opt-in.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

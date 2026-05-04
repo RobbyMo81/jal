@@ -487,3 +487,43 @@ can consume. Do not build the UI.
 - `tests/plugins/PluginCoordinator.test.ts` (new — 29 tests)
 - `tests/plugins/SlackPlugin.test.ts` (new — 5 tests)
 - `tests/plugins/TelegramPlugin.test.ts` (new — 5 tests)
+
+## JAL-017 — 2026-05-01
+### Pattern Discovered
+OllamaAdapter exposes `completeWithLogprobs()` as a concrete method (not on IProviderAdapter). GuardianAngle holds a typed `OllamaAdapter` reference (not `IProviderAdapter`) to access it. DVUProtocol.execute() takes the initial draft as a parameter — it does NOT re-fetch from the student.
+### Gotcha
+DVU loop semantics: `maxCycles` = max corrections. With maxCycles=1, loop runs once: verify → if error → correct → exit. Second verify only happens on the correction if maxCycles=2.
+### Files Modified
+src/apex/auth/OllamaAdapter.ts, src/apex/guardian_angle/{GuardianAngle,DVUProtocol,EntropyMonitor,DomainSleepTracker,InterventionLogger,types}.ts
+
+## JAL-018 — 2026-05-02
+### Pattern Discovered
+.env was NOT in .gitignore before this story. Canvas ui/dist/ and ui/node_modules/ also need to be gitignored.
+### Gotcha
+Installed Ollama models: qwen3:4b (student/default), gemma3:latest (guardian). APEX_GUARDIAN_ENABLED=false by default — enable manually after verifying both models respond.
+### Files Modified
+.env (created), .env.example (updated), .gitignore (updated)
+
+## JAL-019 — 2026-05-02
+### Pattern Discovered
+KeychainFactory uses execFileSync (sync) not execFileAsync — safe to call from ApexRuntime constructor. secret-tool not installed on this machine; FileKeychain is the active backend.
+### Gotcha
+systemd EnvironmentFile does NOT expand ~ — must use absolute paths (/home/spoq/jal/.env not ~/.apex/...).
+### Files Modified
+src/apex/auth/FileKeychain.ts, src/apex/auth/KeychainFactory.ts, src/apex/runtime/ApexRuntime.ts
+
+## JAL-020 — 2026-05-02
+### Pattern Discovered
+Vite `base: '/canvas/'` requires index.html script src to be relative (`./src/main.tsx`) not absolute (`/canvas/src/main.tsx`). FORGE wrote it absolute — always check Vite entry paths when base is non-root.
+### Gotcha
+tsc runs before vite build in the npm script. If Canvas UI tsconfig has errors, build fails before Vite runs.
+### Files Modified
+src/apex/canvas/ui/index.html (fixed src path), src/apex/canvas/ui/dist/ (built)
+
+## JAL-021 — 2026-05-02
+### Pattern Discovered
+nvm-managed node is invisible to systemd. ExecStart must be a wrapper script that sources ~/.nvm/nvm.sh before running ts-node. install.sh patches absolute paths into the installed unit file at install time.
+### Gotcha
+loginctl enable-linger is required for user services to run without an active login session (headless / boot). May require sudo on some systems.
+### Files Modified
+deploy/apex.user.service, deploy/apex-start.sh, deploy/install.sh, deploy/README.md

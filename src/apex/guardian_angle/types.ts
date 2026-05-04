@@ -33,12 +33,18 @@ export interface EntropyAssessment {
 export interface PointOfFailure {
   /**
    * 0-based word index where the first error begins.
-   * null means Guardian found no errors (response approved).
+   * null means Guardian found no errors (response approved) OR a parse error occurred.
+   * Distinguish approval from parse error using the parseError flag.
    */
   index: number | null;
   /** One-sentence reason for the failure, or "correct" if approved. */
   reason: string;
   domain: Domain;
+  /**
+   * True when the Guardian's response could not be parsed as valid JSON.
+   * A parse error is INCONCLUSIVE — not approval. Do not record as correct.
+   */
+  parseError?: boolean;
 }
 
 // ── Domain Sleep Tracker ──────────────────────────────────────────────────────
@@ -132,6 +138,13 @@ export interface GuardianAngleConfig {
    * Default: 2.
    */
   maxDVUCycles?: number;
+  /**
+   * Domains that always invoke Guardian regardless of entropy score.
+   * Prevents high-confidence-but-wrong answers from bypassing verification.
+   * Default: ['shell_commands', 'code_generation'].
+   * Pass [] to disable forced verification entirely.
+   */
+  forcedVerifyDomains?: Domain[];
   /**
    * Directory for intervention log and sleep state files.
    * Defaults to ~/.apex/state/guardian/.

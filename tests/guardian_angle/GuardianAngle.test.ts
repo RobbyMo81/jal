@@ -174,6 +174,129 @@ describe('GuardianAngle DVU correction', () => {
   });
 });
 
+// ── Parse error isolation ─────────────────────────────────────────────────────
+
+describe('GuardianAngle parse error isolation', () => {
+  let dir: string;
+  beforeEach(() => { dir = makeTmpDir(); });
+  afterEach(() => { rmSync(dir, { recursive: true }); jest.restoreAllMocks(); });
+
+  it('does not record parse errors as correct in the sleep tracker', async () => {
+    const { GuardianAngle } = await import('../../src/apex/guardian_angle/GuardianAngle');
+    const ga = new GuardianAngle({
+      studentModel: 'student', guardianModel: 'guardian',
+      stateDir: dir, entropyThreshold: 0.4,
+      sleepModeThreshold: 0.5, sleepModeWindow: 2,
+    });
+
+    // Two requests: student has high entropy, guardian returns garbage both times
+    for (let i = 0; i < 2; i++) {
+      enqueue({ content: 'The answer is 5', logprobs: HIGH_ENTROPY_LOGPROBS });
+      enqueue({ content: 'not valid json at all' });
+      enqueue({ content: 'also invalid json' });
+    }
+
+    await ga.complete(MESSAGES, 'ignored', 'ignored', {});
+    await ga.complete(MESSAGES, 'ignored', 'ignored', {});
+
+    // "What is 2+2?" maps to the 'general' domain via detectDomain.
+    // It must NOT be sleeping — parse errors are inconclusive, not successes.
+    const stats = ga.getSleepStats();
+    expect(stats['general']?.in_sleep_mode).toBe(false);
+  });
+});
+
+// ── forcedVerifyDomains ───────────────────────────────────────────────────────
+
+describe('GuardianAngle forcedVerifyDomains', () => {
+  let dir: string;
+  beforeEach(() => { dir = makeTmpDir(); });
+  afterEach(() => { rmSync(dir, { recursive: true }); jest.restoreAllMocks(); });
+
+  it('invokes Guardian on a forced domain even when entropy is low', async () => {
+    const { GuardianAngle } = await import('../../src/apex/guardian_angle/GuardianAngle');
+    const ga = new GuardianAngle({
+      studentModel: 'student', guardianModel: 'guardian',
+      stateDir: dir, entropyThreshold: 0.4,
+      forcedVerifyDomains: ['general'],  // force-verify the domain for "What is 2+2?"
+    });
+
+    // Student response with LOW entropy — would normally bypass Guardian
+    enqueue({ content: 'The answer is 4', logprobs: LOW_ENTROPY_LOGPROBS });
+    // Guardian verify: approves
+    enqueue({ content: '{"pof":null,"reason":"correct","domain":"general"}' });
+
+    await ga.complete(MESSAGES, 'ignored', 'ignored', {});
+
+    // Guardian was forced to run even though entropy was low — 2 fetch calls total
+    expect((fetch as jest.Mock).mock.calls.length).toBe(2);
+  });
+
+  it('does not invoke Guardian on a non-forced domain with low entropy', async () => {
+    const { GuardianAngle } = await import('../../src/apex/guardian_angle/GuardianAngle');
+    const ga = new GuardianAngle({
+      studentModel: 'student', guardianModel: 'guardian',
+      stateDir: dir, entropyThreshold: 0.4,
+      forcedVerifyDomains: [],  // no forced domains
+    });
+
+    enqueue({ content: 'The answer is 4', logprobs: LOW_ENTROPY_LOGPROBS });
+
+    await ga.complete(MESSAGES, 'ignored', 'ignored', {});
+
+    // Guardian skipped — only 1 fetch call (student draft only)
+    expect((fetch as jest.Mock).mock.calls.length).toBe(1);
+  });
+
+  it('default forced domains include shell_commands', async () => {
+    const { GuardianAngle } = await import('../../src/apex/guardian_angle/GuardianAngle');
+    const ga = new GuardianAngle({
+      studentModel: 'student', guardianModel: 'guardian',
+      stateDir: dir, entropyThreshold: 0.4,
+      // forcedVerifyDomains not set → defaults to ['shell_commands', 'code_generation']
+    });
+
+    // Message that triggers shell_commands domain detection (must contain one of: bash|grep|awk|...)
+    const shellMsg = [{ role: 'user' as const, content: 'Use find and grep to search log files' }];
+    enqueue({ content: 'find /var/log -name "*.log" | grep ERROR', logprobs: LOW_ENTROPY_LOGPROBS });
+    enqueue({ content: '{"pof":null,"reason":"correct","domain":"shell_commands"}' });
+
+    await ga.complete(shellMsg, 'ignored', 'ignored', {});
+
+    // Guardian must have run (2 calls) even though entropy was low
+    expect((fetch as jest.Mock).mock.calls.length).toBe(2);
+  });
+});
+
+// ── Sleep tracker — no false signal from low-entropy bypasses ─────────────────
+
+describe('GuardianAngle sleep tracker accuracy', () => {
+  let dir: string;
+  beforeEach(() => { dir = makeTmpDir(); });
+  afterEach(() => { rmSync(dir, { recursive: true }); jest.restoreAllMocks(); });
+
+  it('does not record low-entropy bypasses as correct in the sleep tracker', async () => {
+    const { GuardianAngle } = await import('../../src/apex/guardian_angle/GuardianAngle');
+    const ga = new GuardianAngle({
+      studentModel: 'student', guardianModel: 'guardian',
+      stateDir: dir, entropyThreshold: 0.4,
+      forcedVerifyDomains: [],  // no forced domains — everything bypasses on low entropy
+      sleepModeThreshold: 0.5, sleepModeWindow: 2,
+    });
+
+    // Two low-entropy responses — used to incorrectly push domain toward sleep
+    enqueue({ content: 'The answer is 4', logprobs: LOW_ENTROPY_LOGPROBS });
+    enqueue({ content: 'The answer is 4', logprobs: LOW_ENTROPY_LOGPROBS });
+
+    await ga.complete(MESSAGES, 'ignored', 'ignored', {});
+    await ga.complete(MESSAGES, 'ignored', 'ignored', {});
+
+    // Domain must NOT appear in sleep stats at all — no Guardian verdicts recorded
+    const stats = ga.getSleepStats();
+    expect(stats['general']).toBeUndefined();
+  });
+});
+
 // ── getSleepStats ─────────────────────────────────────────────────────────────
 
 describe('GuardianAngle.getSleepStats', () => {

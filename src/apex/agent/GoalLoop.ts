@@ -347,15 +347,28 @@ export class GoalLoop {
       ? `Prior step outputs:\n${historyText}\n\n`
       : '';
 
+    // Safety gate rejections require a structurally different correction than
+    // runtime failures — the command must change form, not just fix logic.
+    const isSafetyGateRejection = error.includes('[ShellEngine] SAFETY GATE:');
+    const safetyNote = isSafetyGateRejection
+      ? 'SAFETY GATE REJECTION: The previous command was blocked before execution because it ' +
+        'contained shell metacharacters or a multi-line construct. ' +
+        'You MUST produce a single-line equivalent. Do not use embedded newlines, ' +
+        'multi-line for/while/if blocks, or heredocs. Use one-liner equivalents instead: ' +
+        'chain with semicolons, use find -exec, use awk one-liners, or use sh -c with escaped newlines.\n\n'
+      : '';
+
     const prompt =
-      `You are correcting a failed shell command. Return ONLY the corrected command string — ` +
-      `no explanation, no markdown, no surrounding text.\n\n` +
+      `You are correcting a failed shell command. ` +
+      `Return ONLY the corrected command — a single-line bash expression. ` +
+      `No explanation, no markdown, no surrounding text, no embedded newlines.\n\n` +
+      safetyNote +
       `Goal: ${goal}\n` +
       `Failed step: ${step.description}\n` +
       `Original command: ${step.command}\n` +
       `Error:\n${error.slice(0, 500)}\n\n` +
       priorContext +
-      `Corrected command:`;
+      `Corrected single-line command:`;
 
     const result = await this.gateway.complete([
       { role: 'user', content: prompt },

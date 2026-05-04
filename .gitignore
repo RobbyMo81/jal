@@ -1,5 +1,16 @@
+# Environment — never commit credentials
+.env
+
 # FORGE hidden workspace
 .forge/
+
+# Canvas UI build output
+src/apex/canvas/ui/dist/
+src/apex/canvas/ui/node_modules/
+
+# Apex runtime state
+~/.apex/
+keychain.json
 
 # FORGE memory DB — runtime working directory, not source of record
 forge-memory.db

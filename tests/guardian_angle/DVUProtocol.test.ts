@@ -77,7 +77,7 @@ describe('DVUProtocol.verify', () => {
     expect(pof.reason).toBe('wrong number');
   });
 
-  it('returns null pof on unparseable guardian response (fail safe)', async () => {
+  it('returns parseError=true on unparseable guardian response', async () => {
     const guardian = makeAdapter();
     mockGuardianResponse(guardian, 'I cannot determine if this is correct.');
 
@@ -85,6 +85,48 @@ describe('DVUProtocol.verify', () => {
     const pof = await protocol.verify(MESSAGES, 'some response', 'general');
 
     expect(pof.index).toBeNull();
+    expect(pof.parseError).toBe(true);
+  });
+
+  it('extracts JSON when reason text contains a closing brace', async () => {
+    const guardian = makeAdapter();
+    mockGuardianResponse(
+      guardian,
+      '{"pof":2,"reason":"refers to set {a} which is undefined","domain":"code_generation"}'
+    );
+
+    const protocol = new DVUProtocol(guardian, 'deepseek-r1');
+    const pof = await protocol.verify(MESSAGES, 'some code', 'code_generation');
+
+    expect(pof.index).toBe(2);
+    expect(pof.reason).toBe('refers to set {a} which is undefined');
+    expect(pof.parseError).toBeUndefined();
+  });
+
+  it('strips markdown code fences before parsing', async () => {
+    const guardian = makeAdapter();
+    mockGuardianResponse(
+      guardian,
+      '```json\n{"pof":1,"reason":"wrong","domain":"reasoning"}\n```'
+    );
+
+    const protocol = new DVUProtocol(guardian, 'deepseek-r1');
+    const pof = await protocol.verify(MESSAGES, 'some response', 'reasoning');
+
+    expect(pof.index).toBe(1);
+    expect(pof.parseError).toBeUndefined();
+  });
+
+  it('handles truncated JSON as a parse error', async () => {
+    const guardian = makeAdapter();
+    // Simulates Gemini being cut off at max_tokens mid-object
+    mockGuardianResponse(guardian, '{"pof":0,"reason":"The answer is wro');
+
+    const protocol = new DVUProtocol(guardian, 'deepseek-r1');
+    const pof = await protocol.verify(MESSAGES, 'some response', 'reasoning');
+
+    expect(pof.index).toBeNull();
+    expect(pof.parseError).toBe(true);
   });
 
   it('uses low temperature for deterministic auditing', async () => {
@@ -161,6 +203,28 @@ describe('DVUProtocol.execute', () => {
     // Only 1 guardian verify call + 1 student call
     const guardianCalls = (jest.spyOn(guardian, 'completeWithLogprobs') as jest.Mock).mock.calls.length;
     expect(guardianCalls).toBeLessThanOrEqual(1);
+  });
+
+  it('does not treat parse error as Guardian approval — exhausts cycles without breaking', async () => {
+    const student = makeAdapter();
+    const guardian = makeAdapter();
+
+    // Both verification calls return garbage (simulates Gemini truncation)
+    mockGuardianResponse(guardian, 'ERROR: context window exceeded');
+    mockGuardianResponse(guardian, '{"pof":0,"reason":"truncated at max_to');
+
+    const protocol = new DVUProtocol(guardian, 'deepseek-r1');
+    const result = await protocol.execute(
+      MESSAGES, student, 'qwen2.5-coder:7b', makeEntropy(),
+      makeDraft('The answer is 5'), { maxCycles: 2 }
+    );
+
+    // No DVU cycles — parse errors are inconclusive, not approval
+    expect(result.dvu_cycles).toBe(0);
+    // Draft is unchanged — no correction triggered
+    expect(result.content).toBe('The answer is 5');
+    // Parse error flag propagated to result
+    expect(result.pof?.parseError).toBe(true);
   });
 
   it('returns provider=guardian in result', async () => {
