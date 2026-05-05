@@ -8,11 +8,18 @@
 // Format: one JSON object per line (JSONL) at ~/.apex/audit/audit.log
 // Hash: SHA-256 of the serialised entry (without curr_hash), truncated to 16 hex chars.
 
-import { appendFileSync, mkdirSync } from 'fs';
+import { appendFileSync, mkdirSync, readFileSync, existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { AuditEntry } from '../types';
+
+export interface AuditLogFilters {
+  level?: string;
+  action?: string;
+  since?: string;  // ISO timestamp
+  limit?: number;
+}
 
 // ── IAuditLog ─────────────────────────────────────────────────────────────────
 
@@ -51,8 +58,28 @@ export class AuditLog implements IAuditLog {
     const curr = createHash('sha256').update(payload).digest('hex').slice(0, 16);
     const final: AuditEntry = { ...withPrev, curr_hash: curr };
 
-    appendFileSync(this.logPath, JSON.stringify(final) + '\n', 'utf-8');
+    appendFileSync(this.logPath, JSON.stringify(final) + '
+', 'utf-8');
     this.prevHash = curr;
+  }
+
+  /** Read and filter audit entries. Returns newest-first up to limit. */
+  query(filters: AuditLogFilters = {}): AuditEntry[] {
+    if (!existsSync(this.logPath)) return [];
+    const lines = readFileSync(this.logPath, 'utf8').split('
+').filter(Boolean);
+    let entries: AuditEntry[] = [];
+    for (const line of lines) {
+      try { entries.push(JSON.parse(line) as AuditEntry); } catch { /* skip */ }
+    }
+    if (filters.level) entries = entries.filter(e => e.level === filters.level);
+    if (filters.action) entries = entries.filter(e => (e as Record<string, unknown>)['action'] === filters.action);
+    if (filters.since) {
+      const since = new Date(filters.since).getTime();
+      entries = entries.filter(e => new Date(e.timestamp).getTime() > since);
+    }
+    entries.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return filters.limit ? entries.slice(0, filters.limit) : entries.slice(0, 100);
   }
 
   private ensureDir(): void {

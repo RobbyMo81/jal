@@ -17,7 +17,7 @@ import {
   ContainerState,
   DiskMount,
   NetworkConnection,
-} from '../types';
+} from '../../src/apex/types';
 
 // ── SnapshotCollector ─────────────────────────────────────────────────────────
 
@@ -48,7 +48,8 @@ export class SnapshotCollector {
       if (r.exit_code !== 0 || !r.stdout.trim()) return [];
       return r.stdout
         .trim()
-        .split('\n')
+        .split('
+')
         .map((line) => this.parseProcessLine(line))
         .filter((p): p is ProcessInfo => p !== null);
     } catch {
@@ -83,17 +84,18 @@ export class SnapshotCollector {
   collectContainers(): ContainerState[] {
     try {
       const r = this.shell.exec(
-        'docker ps -a --format "{{.ID}}\\t{{.Names}}\\t{{.Status}}"',
+        'docker ps -a --format "{{.ID}}	{{.Names}}	{{.Status}}"',
         10_000,
       );
       if (r.exit_code !== 0 || !r.stdout.trim()) return [];
       return r.stdout
         .trim()
-        .split('\n')
+        .split('
+')
         .map((line) => {
-          const [id, name, ...statusParts] = line.split('\t');
+          const [id, name, ...statusParts] = line.split('	');
           if (!id || !name) return null;
-          return { id: id.trim(), name: name.trim(), status: statusParts.join('\t').trim() };
+          return { id: id.trim(), name: name.trim(), status: statusParts.join('	').trim() };
         })
         .filter((c): c is ContainerState => c !== null);
     } catch {
@@ -111,7 +113,8 @@ export class SnapshotCollector {
     try {
       const r = this.shell.exec('df -k', 5_000);
       if (r.exit_code !== 0 || !r.stdout.trim()) return [];
-      const lines = r.stdout.trim().split('\n').slice(1); // skip header
+      const lines = r.stdout.trim().split('
+').slice(1); // skip header
       const mounts: DiskMount[] = [];
       for (const line of lines) {
         const parts = line.trim().split(/\s+/);
@@ -164,7 +167,8 @@ export class SnapshotCollector {
   }
 
   private parseSsOutput(output: string): NetworkConnection[] {
-    const lines = output.trim().split('\n');
+    const lines = output.trim().split('
+');
     const conns: NetworkConnection[] = [];
     for (const line of lines) {
       const t = line.trim();

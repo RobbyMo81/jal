@@ -93,8 +93,8 @@ export interface InterventionRecord {
 
 // ── Guardian Angle Config ─────────────────────────────────────────────────────
 
-import type { IAdapterWithLogprobs } from '../auth/OllamaAdapter';
-import type { GuardianBrain } from '../brain/GuardianBrain';
+import type { IAdapterWithLogprobs } from '../../src/apex/auth/OllamaAdapter';
+import type { GuardianBrain } from '../../src/apex/brain/GuardianBrain';
 
 export interface GuardianAngleConfig {
   /** M_S: student model name (used with studentAdapter or a new OllamaAdapter). */
@@ -154,7 +154,7 @@ export interface GuardianAngleConfig {
 
 // ── DVU Result ────────────────────────────────────────────────────────────────
 
-import type { CompletionResult } from '../types';
+import type { CompletionResult } from '../../src/apex/types';
 
 export interface GuardianDVUResult extends CompletionResult {
   /** How many DVU correction cycles were performed (0 = draft accepted). */
